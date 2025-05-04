@@ -1,3 +1,5 @@
-/dist
-/node_modules
-/plugin.zip
+node_modules/
+dist/
+.env
+coverage/
+.DS_Store

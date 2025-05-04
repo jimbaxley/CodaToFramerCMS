@@ -1,9 +1,9 @@
-import { type EditableManagedCollectionField, framer, type ManagedCollection } from "framer-plugin"
+import { type ManagedCollectionFieldInput, type LocalizedValueUpdate, type EnumCaseData, framer, type ManagedCollection } from "framer-plugin"
 import { useEffect, useState } from "react"
-import { type DataSource, dataSourceOptions, mergeFieldsWithExistingFields, syncCollection } from "./data"
+import { type DataSource, mergeFieldsWithExistingFields, syncCollection, dataSourceOptions } from "./data"
 
 interface FieldMappingRowProps {
-    field: EditableManagedCollectionField
+    field: ManagedCollectionFieldInput
     originalFieldName: string | undefined
     disabled: boolean
     onToggleDisabled: (fieldId: string) => void
@@ -21,7 +21,7 @@ function FieldMappingRow({ field, originalFieldName, disabled, onToggleDisabled,
                 tabIndex={0}
             >
                 <input type="checkbox" checked={!disabled} tabIndex={-1} readOnly />
-                <span>{originalFieldName ?? field.id}</span>
+                <span>{originalFieldName ?? field.id} ({field.id})</span>
             </button>
             <svg xmlns="http://www.w3.org/2000/svg" width="8" height="8" fill="none">
                 <path
@@ -50,7 +50,7 @@ function FieldMappingRow({ field, originalFieldName, disabled, onToggleDisabled,
     )
 }
 
-const initialManagedCollectionFields: EditableManagedCollectionField[] = []
+const initialManagedCollectionFields: ManagedCollectionFieldInput[] = []
 const initialFieldIds: ReadonlySet<string> = new Set()
 
 interface FieldMappingProps {
@@ -66,9 +66,13 @@ export function FieldMapping({ collection, dataSource, initialSlugFieldId }: Fie
     const isSyncing = status === "syncing-collection"
     const isLoadingFields = status === "loading-fields"
 
-    const [possibleSlugFields] = useState(() => dataSource.fields.filter(field => field.type === "string"))
+    const [possibleSlugFields] = useState(() => [
+        // Add row ID as the first (default) option
+        { id: '_id', name: 'Row ID', type: 'string' as const },
+        ...dataSource.fields.filter(field => field.type === "string")
+    ] as ManagedCollectionFieldInput[])
 
-    const [selectedSlugField, setSelectedSlugField] = useState<EditableManagedCollectionField | null>(
+    const [selectedSlugField, setSelectedSlugField] = useState<ManagedCollectionFieldInput | null>(
         possibleSlugFields.find(field => field.id === initialSlugFieldId) ?? possibleSlugFields[0] ?? null
     )
 
@@ -85,7 +89,28 @@ export function FieldMapping({ collection, dataSource, initialSlugFieldId }: Fie
             .then(collectionFields => {
                 if (abortController.signal.aborted) return
 
-                setFields(mergeFieldsWithExistingFields(dataSource.fields, collectionFields))
+                setFields(
+                    mergeFieldsWithExistingFields(
+                        dataSource.fields,
+                        collectionFields.map(field => {
+                            if (field.type === "enum") {
+                                return {
+                                    ...field,
+                                    cases: (field.cases || []).map((c: EnumCaseData) => ({
+                                        ...c,
+                                        nameByLocale: Object.fromEntries(
+                                            Object.entries(c.nameByLocale || {}).map(([locale, value]) => [
+                                                locale,
+                                                { action: "set" as const, value: String(value) }
+                                            ])
+                                        )
+                                    }))
+                                }
+                            }
+                            return field
+                        }) as ManagedCollectionFieldInput[]
+                    )
+                )
 
                 const existingFieldIds = new Set(collectionFields.map(field => field.id))
                 const ignoredFields = dataSource.fields.filter(sourceField => !existingFieldIds.has(sourceField.id))
@@ -114,7 +139,7 @@ export function FieldMapping({ collection, dataSource, initialSlugFieldId }: Fie
                 if (field.id !== fieldId) return field
                 return { ...field, name }
             })
-            return updatedFields
+            return updatedFields as ManagedCollectionFieldInput[]
         })
     }
 
@@ -136,9 +161,6 @@ export function FieldMapping({ collection, dataSource, initialSlugFieldId }: Fie
         event.preventDefault()
 
         if (!selectedSlugField) {
-            // This can't happen because the form will not submit if no slug field is selected
-            // but TypeScript can't infer that.
-            console.error("There is no slug field selected. Sync will not be performed")
             framer.notify("Please select a slug field before importing.", { variant: "warning" })
             return
         }
@@ -146,13 +168,42 @@ export function FieldMapping({ collection, dataSource, initialSlugFieldId }: Fie
         try {
             setStatus("syncing-collection")
 
-            const fieldsToSync = fields.filter(field => !ignoredFieldIds.has(field.id))
+            const sanitizedFields = fields.map(field => {
+                const sanitizedField = {
+                    ...field,
+                    name: field.name.trim() || field.id,
+                }
+
+                if (field.type === "enum" && "cases" in field) {
+                    return {
+                        ...sanitizedField,
+                        cases: (field.cases || []).map((caseData: EnumCaseData, idx: number) => ({
+                            id: caseData.id || `case-${idx}`,
+                            name: caseData.name,
+                            nameByLocale: Object.fromEntries(
+                                Object.entries(caseData.nameByLocale || {}).map(([locale, value]) => [
+                                    locale,
+                                    {
+                                        action: "set" as const,
+                                        value: typeof value === 'string' ? value : String(value),
+                                        needsReview: false
+                                    } satisfies LocalizedValueUpdate
+                                ])
+                            )
+                        }))
+                    }
+                }
+
+                return sanitizedField
+            })
+
+            const fieldsToSync = sanitizedFields.filter(field => !ignoredFieldIds.has(field.id)) as ManagedCollectionFieldInput[]
 
             await syncCollection(collection, dataSource, fieldsToSync, selectedSlugField)
             await framer.closePlugin("Synchronization successful", { variant: "success" })
         } catch (error) {
             console.error(error)
-            framer.notify(`Failed to sync collection “${dataSource.id}”. Check the logs for more details.`, {
+            framer.notify(`Failed to sync collection "${dataSource.id}". Check the logs for more details.`, {
                 variant: "error",
             })
         } finally {
@@ -189,7 +240,7 @@ export function FieldMapping({ collection, dataSource, initialSlugFieldId }: Fie
                         {possibleSlugFields.map(possibleSlugField => {
                             return (
                                 <option key={`slug-field-${possibleSlugField.id}`} value={possibleSlugField.id}>
-                                    {possibleSlugField.name}
+                                    {possibleSlugField.name} ({possibleSlugField.id})
                                 </option>
                             )
                         })}

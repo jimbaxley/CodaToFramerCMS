@@ -2,7 +2,7 @@ import "./App.css"
 
 import { framer, type ManagedCollection } from "framer-plugin"
 import { useEffect, useLayoutEffect, useState } from "react"
-import { type DataSource, getDataSource } from "./data"
+import { type DataSource, getDataSource, getCodaDataSource } from "./data"
 import { FieldMapping } from "./FieldMapping"
 import { SelectDataSource } from "./SelectDataSource"
 
@@ -14,14 +14,27 @@ interface AppProps {
 
 export function App({ collection, previousDataSourceId, previousSlugFieldId }: AppProps) {
     const [dataSource, setDataSource] = useState<DataSource | null>(null)
-    const [isLoadingDataSource, setIsLoadingDataSource] = useState(Boolean(previousDataSourceId))
+    const [isLoadingDataSource, setIsLoadingDataSource] = useState(false)
+
+    const handleSelectDataSource = async (config: { apiKey: string; docId: string; tableId: string }) => {
+        setIsLoadingDataSource(true)
+        try {
+            const dataSource = await getCodaDataSource(config.apiKey, config.docId, config.tableId)
+            setDataSource(dataSource)
+        } catch (error) {
+            console.error(error)
+            framer.notify("Failed to load data source. Check the logs for more details.", { variant: "error" })
+        } finally {
+            setIsLoadingDataSource(false)
+        }
+    }
 
     useLayoutEffect(() => {
         const hasDataSourceSelected = Boolean(dataSource)
 
         framer.showUI({
-            width: hasDataSourceSelected ? 360 : 260,
-            height: hasDataSourceSelected ? 425 : 340,
+            width: hasDataSourceSelected ? 360 : 300,
+            height: hasDataSourceSelected ? 425 : 400,
             minWidth: hasDataSourceSelected ? 360 : undefined,
             minHeight: hasDataSourceSelected ? 425 : undefined,
             resizable: hasDataSourceSelected,
@@ -69,7 +82,7 @@ export function App({ collection, previousDataSourceId, previousSlugFieldId }: A
     }
 
     if (!dataSource) {
-        return <SelectDataSource onSelectDataSource={setDataSource} />
+        return <SelectDataSource onSelectDataSource={handleSelectDataSource} />
     }
 
     return <FieldMapping collection={collection} dataSource={dataSource} initialSlugFieldId={previousSlugFieldId} />

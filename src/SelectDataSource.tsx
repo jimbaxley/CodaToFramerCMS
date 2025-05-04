@@ -1,71 +1,148 @@
 import { framer } from "framer-plugin"
-import { useState } from "react"
-import { type DataSource, getDataSource, dataSourceOptions } from "./data"
+import { useState, useEffect } from "react"
+import { getCodaDocs, getCodaTables, type CodaDoc, type CodaTable } from "./data"
 
 interface SelectDataSourceProps {
-    onSelectDataSource: (dataSource: DataSource) => void
+    onSelectDataSource: (config: { apiKey: string; docId: string; tableId: string }) => void
 }
 
 export function SelectDataSource({ onSelectDataSource }: SelectDataSourceProps) {
-    const [selectedDataSourceId, setSelectedDataSourceId] = useState<string>(dataSourceOptions[0].id)
+    const [step, setStep] = useState<'api-key' | 'select-doc' | 'select-table'>('api-key')
+    const [apiKey, setApiKey] = useState("")
+    const [docs, setDocs] = useState<CodaDoc[]>([])
+    const [selectedDoc, setSelectedDoc] = useState<CodaDoc | null>(null)
+    const [tables, setTables] = useState<CodaTable[]>([])
+    const [selectedTable, setSelectedTable] = useState<CodaTable | null>(null)
     const [isLoading, setIsLoading] = useState(false)
 
-    const handleSubmit = async (event: React.FormEvent<HTMLFormElement>) => {
-        event.preventDefault()
+    // Fetch docs when API key is provided
+    useEffect(() => {
+        if (!apiKey || step !== 'select-doc') return
+        
+        const abortController = new AbortController()
+        setIsLoading(true)
 
-        try {
-            setIsLoading(true)
-
-            const dataSource = await getDataSource(selectedDataSourceId)
-            onSelectDataSource(dataSource)
-        } catch (error) {
-            console.error(error)
-            framer.notify(`Failed to load data source “${selectedDataSourceId}”. Check the logs for more details.`, {
-                variant: "error",
+        getCodaDocs(apiKey, abortController.signal)
+            .then(docs => {
+                if (!abortController.signal.aborted) {
+                    setDocs(docs)
+                    setIsLoading(false)
+                }
             })
-        } finally {
-            setIsLoading(false)
+            .catch(error => {
+                if (!abortController.signal.aborted) {
+                    console.error(error)
+                    framer.notify("Failed to fetch docs. Check the logs for more details.", { variant: "error" })
+                    setIsLoading(false)
+                }
+            })
+
+        return () => abortController.abort()
+    }, [apiKey, step])
+
+    // Fetch tables when doc is selected
+    useEffect(() => {
+        if (!apiKey || !selectedDoc || step !== 'select-table') return
+        
+        const abortController = new AbortController()
+        setIsLoading(true)
+
+        getCodaTables(apiKey, selectedDoc.id, abortController.signal)
+            .then(tables => {
+                if (!abortController.signal.aborted) {
+                    setTables(tables)
+                    setIsLoading(false)
+                }
+            })
+            .catch(error => {
+                if (!abortController.signal.aborted) {
+                    console.error(error)
+                    framer.notify("Failed to fetch tables. Check the logs for more details.", { variant: "error" })
+                    setIsLoading(false)
+                }
+            })
+
+        return () => abortController.abort()
+    }, [apiKey, selectedDoc, step])
+
+    const handleApiKeySubmit = (event: React.FormEvent<HTMLFormElement>) => {
+        event.preventDefault()
+        if (!apiKey) {
+            framer.notify("Please enter your API key.", { variant: "warning" })
+            return
         }
+        setStep('select-doc')
+    }
+
+    const handleDocSelect = (doc: CodaDoc) => {
+        setSelectedDoc(doc)
+        setStep('select-table')
+    }
+
+    const handleTableSelect = (table: CodaTable) => {
+        setSelectedTable(table)
+        onSelectDataSource({ 
+            apiKey, 
+            docId: selectedDoc?.id || '', 
+            tableId: table.id 
+        })
+    }
+
+    if (isLoading) {
+        return (
+            <main className="loading">
+                <div className="framer-spinner" />
+            </main>
+        )
     }
 
     return (
         <main className="framer-hide-scrollbar setup">
-            <div className="intro">
-                <div className="logo">
-                    <svg xmlns="http://www.w3.org/2000/svg" width="30" height="30" fill="none">
-                        <path
-                            fill="currentColor"
-                            d="M15.5 8c3.59 0 6.5 1.38 6.5 3.083 0 1.702-2.91 3.082-6.5 3.082S9 12.785 9 11.083C9 9.38 11.91 8 15.5 8Zm6.5 7.398c0 1.703-2.91 3.083-6.5 3.083S9 17.101 9 15.398v-2.466c0 1.703 2.91 3.083 6.5 3.083s6.5-1.38 6.5-3.083Zm0 4.316c0 1.703-2.91 3.083-6.5 3.083S9 21.417 9 19.714v-2.466c0 1.702 2.91 3.083 6.5 3.083S22 18.95 22 17.248Z"
+            {step === 'api-key' && (
+                <form onSubmit={handleApiKeySubmit}>
+                    <label>
+                        Coda API Key
+                        <input
+                            type="text"
+                            value={apiKey}
+                            onChange={e => setApiKey(e.target.value)}
+                            placeholder="Enter your Coda API key"
+                            required
                         />
-                    </svg>
-                </div>
-                <div className="content">
-                    <h2>CMS Starter</h2>
-                    <p>Everything you need to get started with a CMS Plugin.</p>
-                </div>
-            </div>
+                    </label>
+                    <button type="submit">Next</button>
+                </form>
+            )}
 
-            <form onSubmit={handleSubmit}>
-                <label htmlFor="collection">
-                    <select
-                        id="collection"
-                        onChange={event => setSelectedDataSourceId(event.target.value)}
-                        value={selectedDataSourceId}
-                    >
-                        <option value="" disabled>
-                            Choose Source…
-                        </option>
-                        {dataSourceOptions.map(({ id, name }) => (
-                            <option key={id} value={id}>
-                                {name}
-                            </option>
-                        ))}
-                    </select>
-                </label>
-                <button disabled={!selectedDataSourceId || isLoading}>
-                    {isLoading ? <div className="framer-spinner" /> : "Next"}
-                </button>
-            </form>
+            {step === 'select-doc' && (
+                <div className="selection-list">
+                    <h2>Select a Doc</h2>
+                    {docs.map(doc => (
+                        <button
+                            key={doc.id}
+                            className="list-item"
+                            onClick={() => handleDocSelect(doc)}
+                        >
+                            {doc.name}
+                        </button>
+                    ))}
+                </div>
+            )}
+
+            {step === 'select-table' && (
+                <div className="selection-list">
+                    <h2>Select a Table</h2>
+                    {tables.map(table => (
+                        <button
+                            key={table.id}
+                            className="list-item"
+                            onClick={() => handleTableSelect(table)}
+                        >
+                            {table.name}
+                        </button>
+                    ))}
+                </div>
+            )}
         </main>
     )
 }
