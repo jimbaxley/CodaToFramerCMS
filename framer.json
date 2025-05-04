@@ -1,0 +1,9 @@
+{
+  "id": "d50c98",
+  "name": "Coda Cms",
+  "modes": [
+    "configureManagedCollection",
+    "syncManagedCollection"
+  ],
+  "icon": "/icon.svg"
+}
