@@ -1,6 +1,6 @@
 import { type ManagedCollectionFieldInput, type LocalizedValueUpdate, type EnumCaseData, framer, type ManagedCollection } from "framer-plugin"
 import { useEffect, useState } from "react"
-import { type DataSource, mergeFieldsWithExistingFields, syncCollection, dataSourceOptions } from "./data"
+import { type DataSource, mergeFieldsWithExistingFields, syncCollection } from "./data"
 
 interface FieldMappingRowProps {
     field: ManagedCollectionFieldInput
@@ -79,7 +79,8 @@ export function FieldMapping({ collection, dataSource, initialSlugFieldId }: Fie
     const [fields, setFields] = useState(initialManagedCollectionFields)
     const [ignoredFieldIds, setIgnoredFieldIds] = useState(initialFieldIds)
 
-    const dataSourceName = dataSourceOptions.find(option => option.id === dataSource.id)?.name ?? dataSource.id
+    // Use the dataSource id directly since it's the table name from Coda
+    const dataSourceName = dataSource.id
 
     useEffect(() => {
         const abortController = new AbortController()
@@ -93,22 +94,17 @@ export function FieldMapping({ collection, dataSource, initialSlugFieldId }: Fie
                     mergeFieldsWithExistingFields(
                         dataSource.fields,
                         collectionFields.map(field => {
-                            if (field.type === "enum") {
+                            if (field.type === "enum" && field.cases) {
                                 return {
                                     ...field,
-                                    cases: (field.cases || []).map((c: EnumCaseData) => ({
+                                    cases: field.cases.map(c => ({
                                         ...c,
-                                        nameByLocale: Object.fromEntries(
-                                            Object.entries(c.nameByLocale || {}).map(([locale, value]) => [
-                                                locale,
-                                                { action: "set" as const, value: String(value) }
-                                            ])
-                                        )
+                                        nameByLocale: c.nameByLocale ?? {}
                                     }))
                                 }
                             }
                             return field
-                        }) as ManagedCollectionFieldInput[]
+                        })
                     )
                 )
 
@@ -180,16 +176,7 @@ export function FieldMapping({ collection, dataSource, initialSlugFieldId }: Fie
                         cases: (field.cases || []).map((caseData: EnumCaseData, idx: number) => ({
                             id: caseData.id || `case-${idx}`,
                             name: caseData.name,
-                            nameByLocale: Object.fromEntries(
-                                Object.entries(caseData.nameByLocale || {}).map(([locale, value]) => [
-                                    locale,
-                                    {
-                                        action: "set" as const,
-                                        value: typeof value === 'string' ? value : String(value),
-                                        needsReview: false
-                                    } satisfies LocalizedValueUpdate
-                                ])
-                            )
+                            nameByLocale: caseData.nameByLocale ?? {}
                         }))
                     }
                 }

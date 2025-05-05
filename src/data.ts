@@ -19,11 +19,6 @@ export interface DataSource {
     items: Record<string, FieldDataEntryInput>[]
 }
 
-export const dataSourceOptions = [
-    { id: "articles", name: "Articles" },
-    { id: "categories", name: "Categories" },
-] as const
-
 /**
  * Retrieve data and process it into a structured format.
  *
@@ -40,48 +35,21 @@ export const dataSourceOptions = [
  *   ]
  * }
  */
-export async function getDataSource(dataSourceId: string, abortSignal?: AbortSignal): Promise<DataSource> {
-    // Fetch from your data source
-    const dataSourceResponse = await fetch(`/data/${dataSourceId}.json`, { signal: abortSignal })
-    const dataSource = await dataSourceResponse.json()
-
-    // Map your source fields to supported field types in Framer
-    const fields: ManagedCollectionFieldInput[] = []
-    for (const field of dataSource.fields) {
-        switch (field.type) {
-            case "string":
-            case "number":
-            case "boolean":
-            case "color":
-            case "formattedText":
-            case "date":
-            case "link":
-                fields.push({
-                    id: field.name,
-                    name: field.name,
-                    type: field.type,
-                })
-                break
-            case "image":
-            case "file":
-            case "enum":
-            case "collectionReference":
-            case "multiCollectionReference":
-                console.warn(`Support for field type "${field.type}" is not implemented in this Plugin.`)
-                break
-            default: {
-                console.warn(`Unknown field type "${field.type}".`)
-            }
-        }
+export async function getDataSource(abortSignal?: AbortSignal): Promise<DataSource> {
+    // Get existing Coda settings from plugin data
+    const collection = await framer.getActiveManagedCollection();
+    const [apiKey, docId, tableId] = await Promise.all([
+        collection.getPluginData('apiKey'),
+        collection.getPluginData('docId'),
+        collection.getPluginData('tableId')
+    ]);
+    
+    if (!apiKey || !docId || !tableId) {
+        throw new Error('Missing Coda configuration. Please configure the plugin first.')
     }
 
-    const items = dataSource.items as Record<string, FieldDataEntryInput>[]
-
-    return {
-        id: dataSource.id,
-        fields,
-        items,
-    }
+    // Use the existing getCodaDataSource function to fetch data
+    return getCodaDataSource(apiKey, docId, tableId, abortSignal);
 }
 
 interface CodaColumn {
@@ -265,17 +233,17 @@ export async function getCodaDataSource(
     apiKey: string,
     docId: string,
     tableId: string,
-    abortSignal?: AbortSignal
+    signal?: AbortSignal
 ): Promise<DataSource> {
     const headers = {
-        'Authorization': `Bearer ${encodeURIComponent(apiKey)}`,
+        'Authorization': `Bearer ${apiKey}`,
         'Content-Type': 'application/json'
     }
 
     // First, fetch the columns metadata
     const columnsUrl = `https://coda.io/apis/v1/docs/${docId}/tables/${tableId}/columns`
     const columnsResponse = await fetch(columnsUrl, {
-        signal: abortSignal,
+        ...(signal ? { signal } : {}),
         headers,
     })
 
@@ -302,7 +270,7 @@ export async function getCodaDataSource(
     // Then fetch the rows
     const rowsUrl = `https://coda.io/apis/v1/docs/${docId}/tables/${tableId}/rows`
     const rowsResponse = await fetch(rowsUrl, {
-        signal: abortSignal,
+        ...(signal ? { signal } : {}),
         headers,
     })
 
@@ -427,16 +395,7 @@ export async function syncCollection(
                 cases: (field.cases || []).map((caseData: EnumCaseData, idx: number) => ({
                     id: caseData.id || `case-${idx}`,
                     name: caseData.name,
-                    nameByLocale: Object.fromEntries(
-                        Object.entries(caseData.nameByLocale || {}).map(([locale, value]) => [
-                            locale,
-                            {
-                                action: "set" as const,
-                                value: typeof value === 'string' ? value : String(value),
-                                needsReview: false
-                            } satisfies LocalizedValueUpdate
-                        ])
-                    )
+                    nameByLocale: caseData.nameByLocale ?? {}
                 }))
             }
         }
@@ -465,10 +424,16 @@ export async function syncExistingCollection(
     }
 
     try {
-        const dataSource = await getDataSource(previousDataSourceId)
+        const dataSource = await getDataSource()
         const existingFields = await collection.getFields()
 
-        const slugField = dataSource.fields.find(field => field.id === previousSlugFieldId)
+        // Create a list of possible slug fields including the special _id field
+        const possibleSlugFields = [
+            { id: '_id', name: 'Row ID', type: 'string' as const },
+            ...dataSource.fields.filter(field => field.type === "string")
+        ]
+        
+        const slugField = possibleSlugFields.find(field => field.id === previousSlugFieldId)
         if (!slugField) {
             framer.notify(`No field matches the slug field id "${previousSlugFieldId}". Sync will not be performed.`, {
                 variant: "error",
@@ -525,16 +490,16 @@ export interface CodaTable {
 
 export async function getCodaDocs(
     apiKey: string,
-    abortSignal?: AbortSignal
+    signal?: AbortSignal
 ): Promise<CodaDoc[]> {
     const docsUrl = `https://coda.io/apis/v1/docs`
     const headers = {
-        'Authorization': `Bearer ${encodeURIComponent(apiKey)}`,
+        'Authorization': `Bearer ${apiKey}`,
         'Content-Type': 'application/json'
     }
     
     const docsResponse = await fetch(docsUrl, {
-        signal: abortSignal,
+        ...(signal ? { signal } : {}),
         headers,
     })
 
@@ -556,16 +521,16 @@ export async function getCodaDocs(
 export async function getCodaTables(
     apiKey: string,
     docId: string,
-    abortSignal?: AbortSignal
+    signal?: AbortSignal
 ): Promise<CodaTable[]> {
     const tablesUrl = `https://coda.io/apis/v1/docs/${docId}/tables`
     const headers = {
-        'Authorization': `Bearer ${encodeURIComponent(apiKey)}`,
+        'Authorization': `Bearer ${apiKey}`,
         'Content-Type': 'application/json'
     }
     
     const tablesResponse = await fetch(tablesUrl, {
-        signal: abortSignal,
+        ...(signal ? { signal } : {}),
         headers,
     })
 

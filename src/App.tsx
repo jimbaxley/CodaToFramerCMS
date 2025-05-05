@@ -20,6 +20,12 @@ export function App({ collection, previousDataSourceId, previousSlugFieldId }: A
         setIsLoadingDataSource(true)
         try {
             const dataSource = await getCodaDataSource(config.apiKey, config.docId, config.tableId)
+            
+            // Store the Coda credentials
+            await collection.setPluginData('apiKey', config.apiKey)
+            await collection.setPluginData('docId', config.docId)
+            await collection.setPluginData('tableId', config.tableId)
+            
             setDataSource(dataSource)
         } catch (error) {
             console.error(error)
@@ -49,22 +55,20 @@ export function App({ collection, previousDataSourceId, previousSlugFieldId }: A
         const abortController = new AbortController()
 
         setIsLoadingDataSource(true)
-        getDataSource(previousDataSourceId, abortController.signal)
+        getDataSource(abortController.signal)
             .then(setDataSource)
             .catch(error => {
                 if (abortController.signal.aborted) return
 
-                console.error(error)
+                console.error("Failed to load data source:", error)
+                setDataSource(null)  // Reset data source on error
                 framer.notify(
-                    `Error loading previously configured data source “${previousDataSourceId}”. Check the logs for more details.`,
-                    {
-                        variant: "error",
-                    }
+                    `Error loading data source: ${error.message}`,
+                    { variant: "error" }
                 )
             })
             .finally(() => {
                 if (abortController.signal.aborted) return
-
                 setIsLoadingDataSource(false)
             })
 
