@@ -104,12 +104,23 @@ function mapCodaTypeToFramerType(column: CodaColumn): ManagedCollectionFieldInpu
                 name: column.name,
                 type: 'boolean'
             }
-        case 'date':
-        case 'datetime':
+        case 'date': // Coda date-only
             return {
                 id: column.id,
                 name: column.name,
-                type: 'date'
+                type: 'date' // Framer date type
+            }
+        case 'datetime': // Coda date with time
+            return {
+                id: column.id,
+                name: column.name,
+                type: 'date' // Framer date type (will store full ISO string with time)
+            }
+        case 'time': // Coda time-only (speculative type)
+             return {
+                id: column.id,
+                name: column.name,
+                type: 'string' // Framer string type
             }
         case 'image':
             return {
@@ -161,6 +172,14 @@ function mapCodaTypeToFramerType(column: CodaColumn): ManagedCollectionFieldInpu
 function transformCodaValue(value: any, field: ManagedCollectionFieldInput): FieldDataEntryInput {
     if (value === null || value === undefined) {
         // Return appropriate default value based on type
+        // For date types, Framer might expect a valid date string or null.
+        // Returning empty string for simplicity, but might need adjustment based on Framer's strictness.
+        if (field.type === 'date') {
+            // Framer's date field might prefer null or a specific empty state
+            // For now, let's send an empty string, which might be ignored or cause issues.
+            // A better approach might be to not set the field if value is null/undefined.
+            return { type: 'string', value: '' } // Or handle as per Framer's expectation for empty dates
+        }
         return { type: 'string', value: '' }
     }
 
@@ -180,8 +199,15 @@ function transformCodaValue(value: any, field: ManagedCollectionFieldInput): Fie
             return { type: 'number', value: Number(value) }
         case 'boolean':
             return { type: 'boolean', value: Boolean(value) }
-        case 'date':
-            return { type: 'date', value: new Date(value).toISOString() }
+        case 'date': // Covers Coda 'date' and 'datetime' mapped to Framer 'date'
+            // Ensure the value is a valid date string or can be parsed into one.
+            // Coda likely provides ISO strings or similar standard formats.
+            try {
+                return { type: 'date', value: new Date(value).toISOString() }
+            } catch (e) {
+                console.warn(`Invalid date value encountered for field ${field.name}: ${value}. Falling back to empty string.`);
+                return { type: 'string', value: '' } // Fallback for invalid date values
+            }
         case 'image':
         case 'file': {
             const urlStr = String(value);

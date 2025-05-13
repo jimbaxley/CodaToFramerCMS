@@ -5,7 +5,7 @@ main {
     flex-direction: column;
     align-items: start;
     padding: 0 15px 15px;
-    height: 100%;
+    height: 100%; /* Default height for other main views */
     gap: 15px;
 
     user-select: none;
@@ -49,6 +49,7 @@ form {
 
 .setup {
     align-items: center;
+    overflow-y: auto; /* Allow vertical scrolling if content overflows */
 }
 
 .setup select {
@@ -60,9 +61,9 @@ form {
     flex-direction: column;
     align-items: center;
     justify-content: center;
-    height: 100%;
+    height: 100%; /* Revert to 100% height */
     width: 100%;
-    flex: 1;
+    flex: 1; /* Revert to flex: 1 to allow growing */
     text-align: center;
     max-width: 160px;
     gap: 15px;
@@ -91,6 +92,106 @@ form {
 .setup select {
     width: 100%;
 }
+
+/* Styles for the new intro screen elements */
+.intro-screen {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    text-align: center;
+    gap: 10px; /* Adjusted gap for tighter spacing with SVGs */
+    padding: 15px; /* Adjusted padding */
+}
+
+.coda-logo-intro {
+    width: 50px; /* Adjust as needed */
+    height: auto;
+    margin-bottom: 10px;
+}
+
+.welcome-graphic-intro {
+    width: 180px; /* Adjust as needed */
+    height: auto;
+    margin-bottom: 10px;
+}
+
+.intro-screen h2 {
+    font-size: 1.2em;
+    margin-bottom: 5px;
+}
+
+.intro-screen p {
+    color: var(--framer-color-text-secondary);
+    font-size: 1em;
+    max-width: 280px; /* Limit width for better readability */
+}
+
+.steps-list {
+    list-style-position: inside;
+    text-align: left;
+    padding-left: 0; /* Remove default padding */
+    margin-bottom: 15px;
+    font-size: 1em;
+    color: var(--framer-color-text-secondary);
+}
+
+.steps-list li {
+    margin-bottom: 5px;
+}
+
+.api-key-form {
+    display: flex;
+    flex-direction: column;
+    width: 100%;
+    gap: 10px;
+    align-items: center; /* Center form elements */
+}
+
+.api-key-form label {
+    font-weight: bold;
+    font-size: 0.9em;
+    color: var(--framer-color-text);
+    width: auto; /* Adjust label width */
+    justify-content: center; /* Center label text if it wraps */
+}
+
+.api-key-form input[type="text"] {
+    width: 100%;
+    max-width: 260px; /* Max width for input field */
+}
+
+.api-key-form button[type="submit"] {
+    background-color: var(--framer-color-tint);
+    color: white;
+    border: none;
+    padding: 10px;
+    border-radius: 6px;
+    cursor: pointer;
+    font-weight: 500;
+    width: 100%; /* Fill container */
+    max-width: 260px; /* Match input field max-width */
+}
+
+.api-key-form button[type="submit"]:hover {
+    opacity: 0.9;
+}
+
+.api-docs-link {
+    font-size: 0.8em;
+    color: var(--framer-color-text-tertiary);
+    text-align: center;
+    max-width: 280px; /* Limit width */
+}
+
+.api-docs-link a {
+    color: var(--framer-color-tint);
+    text-decoration: none;
+}
+
+.api-docs-link a:hover {
+    text-decoration: underline;
+}
+/* End of styles for intro screen */
 
 .mapping {
     padding-bottom: 0;
@@ -197,24 +298,46 @@ form {
 .list-item {
     display: flex;
     align-items: center;
-    width: 100%;
-    height: 32px;
-    padding: 0 10px;
+    width: 100%; /* Fill container */
+    height: 36px; /* Slightly taller for better touch target */
+    padding: 0 12px;
     border-radius: 6px;
     font-size: 13px;
     font-weight: 500;
     text-align: left;
-    background: var(--framer-color-bg-secondary);
-    color: var(--framer-color-text);
-    border: none;
+    background: var(--framer-color-bg-tertiary); /* Dark grey background */
+    color: var(--framer-color-text); /* Text color for dark grey background */
+    border: 1px solid var(--framer-color-border); /* Optional: add a border */
     cursor: pointer;
-    transition: background 0.2s ease;
+    transition: background-color 0.2s ease, color 0.2s ease, opacity 0.2s ease;
 }
 
 .list-item:hover {
-    background: var(--framer-color-bg-tertiary);
+    background: var(--framer-color-tint); /* Blue background on hover */
+    color: white; /* White text on hover */
+    border-color: var(--framer-color-tint); /* Match border to background on hover */
+    opacity: 1; /* Ensure full opacity on hover if previously reduced */
 }
 
 .list-item:active {
-    background: var(--framer-color-bg-quaternary);
+    /* background: var(--framer-color-bg-quaternary); */ /* Keep or adjust active state if needed */
+    opacity: 0.8;
+}
+
+.back-button {
+    margin-top: 15px; /* Add some space above the back button */
+    background-color: var(--framer-color-tint); /* Blue background */
+    color: white; /* White text */
+    border: none;
+    padding: 10px;
+    border-radius: 6px;
+    cursor: pointer;
+    width: 100%; /* Fill container */
+    align-self: center;
+    font-weight: 500;
+    transition: opacity 0.2s ease;
+}
+
+.back-button:hover {
+    opacity: 0.9; /* Darken on hover */
 }

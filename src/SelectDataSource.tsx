@@ -1,6 +1,8 @@
 import { framer } from "framer-plugin"
 import { useState, useEffect } from "react"
 import { getCodaDocs, getCodaTables, type CodaDoc, type CodaTable } from "./data"
+// Removed CODAIcon import
+// Removed BothIcon import, will use direct path for /public/both.svg
 
 interface SelectDataSourceProps {
     onSelectDataSource: (config: { apiKey: string; docId: string; tableId: string }) => void
@@ -99,19 +101,32 @@ export function SelectDataSource({ onSelectDataSource }: SelectDataSourceProps) 
     return (
         <main className="framer-hide-scrollbar setup">
             {step === 'api-key' && (
-                <form onSubmit={handleApiKeySubmit}>
-                    <label>
-                        Coda API Key
+                <div className="intro-screen">
+                   
+                    <img src="/both.svg" alt="Connect Coda and Framer" className="welcome-graphic-intro" />
+                    <h2>Connect Coda to Framer's CMS:</h2>
+                    <ol className="steps-list">
+                        <li>Enter your Coda API Key below.</li>
+                        <li>Select your Coda Doc.</li>
+                        <li>Choose your Table as a data source.</li>
+                    </ol>
+                    <p className="api-docs-link">
+                            Need help?<br></br> Visit the <a href="https://coda.io/developers/apis/v1" target="_blank" rel="noopener noreferrer">Coda API Documentation</a>.
+                        </p>
+                    <form onSubmit={handleApiKeySubmit} className="api-key-form">
+                        
                         <input
+                            id="coda-api-key-input"
                             type="text"
                             value={apiKey}
                             onChange={e => setApiKey(e.target.value)}
                             placeholder="Enter your Coda API key"
                             required
                         />
-                    </label>
-                    <button type="submit">Next</button>
-                </form>
+                        
+                        <button type="submit">Next</button>
+                    </form>
+                </div>
             )}
 
             {step === 'select-doc' && (
@@ -126,6 +141,9 @@ export function SelectDataSource({ onSelectDataSource }: SelectDataSourceProps) 
                             {doc.name}
                         </button>
                     ))}
+                    <button type="button" onClick={() => setStep('api-key')} className="back-button">
+                        Back
+                    </button>
                 </div>
             )}
 
@@ -141,6 +159,9 @@ export function SelectDataSource({ onSelectDataSource }: SelectDataSourceProps) 
                             {table.name}
                         </button>
                     ))}
+                    <button type="button" onClick={() => setStep('select-doc')} className="back-button">
+                        Back
+                    </button>
                 </div>
             )}
         </main>
