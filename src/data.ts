@@ -225,26 +225,47 @@ function transformCodaValue(value: any, field: ManagedCollectionFieldInput, coda
         case 'string': 
             if (codaColumnType === 'time') { 
                 try {
-                    const dateObj = new Date(value); // Coda sends time as a full datetime string
-                    if (isNaN(dateObj.getTime())) {
-                        console.warn(`Invalid time value encountered for field ${field.name}: ${value}. Falling back to empty string.`);
-                        return { type: 'string', value: '' };
+                    let hours24: number;
+                    let minutes: number;
+                    let seconds: number;
+
+                    if (typeof value === 'string' && value.startsWith('PT')) {
+                        // Parse ISO 8601 duration for time of day
+                        // Example: PT8H30M0S -> hours=8, minutes=30, seconds=0
+                        // Example: PT17H45M  -> hours=17, minutes=45, seconds=0
+                        const hoursMatch = value.match(/(\d+)H/);
+                        const minutesMatch = value.match(/(\d+)M/);
+                        const secondsMatch = value.match(/(\d+)S/);
+                        
+                        hours24 = hoursMatch && hoursMatch[1] ? parseInt(hoursMatch[1], 10) : 0;
+                        minutes = minutesMatch && minutesMatch[1] ? parseInt(minutesMatch[1], 10) : 0;
+                        seconds = secondsMatch && secondsMatch[1] ? parseInt(secondsMatch[1], 10) : 0;
+
+                        if (isNaN(hours24) || isNaN(minutes) || isNaN(seconds)) {
+                            console.warn(`Invalid ISO duration time value encountered for field ${field.name}: ${value}. Falling back to empty string.`);
+                            return { type: 'string', value: '' };
+                        }
+                    } else {
+                        // Fallback for when Coda might send a full datetime string for a 'time' type
+                        // or if the value is already a Date object (less likely from API but good for robustness)
+                        const dateObj = new Date(value); 
+                        if (isNaN(dateObj.getTime())) {
+                            console.warn(`Invalid date-based time value encountered for field ${field.name}: ${value}. Falling back to empty string.`);
+                            return { type: 'string', value: '' };
+                        }
+                        // Use local time zone components
+                        hours24 = dateObj.getHours();
+                        minutes = dateObj.getMinutes();
+                        seconds = dateObj.getSeconds();
                     }
                     
-                    const hours24 = dateObj.getUTCHours();
-                    const minutes = dateObj.getUTCMinutes();
-                    const seconds = dateObj.getUTCSeconds();
-
                     if (use12HourTime) {
                         const ampm = hours24 >= 12 ? 'PM' : 'AM';
                         let hours12 = hours24 % 12;
                         hours12 = hours12 ? hours12 : 12; // Convert 0 (midnight) to 12, and 12 (noon) to 12
                         
-                        const stringHours12 = hours12.toString(); // e.g., "1", "12"
+                        const stringHours12 = hours12.toString(); 
                         const paddedMinutes = minutes.toString().padStart(2, '0');
-                        // Omitting seconds for typical 12-hour display, add if needed:
-                        // const paddedSeconds = seconds.toString().padStart(2, '0');
-                        // return { type: 'string', value: `${stringHours12}:${paddedMinutes}:${paddedSeconds} ${ampm}` };
                         return { type: 'string', value: `${stringHours12}:${paddedMinutes} ${ampm}` };
                     } else {
                         // Default to 24-hour format with seconds
