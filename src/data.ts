@@ -19,6 +19,11 @@ export interface DataSource {
     items: Record<string, FieldDataEntryInput>[]
 }
 
+export interface GetDataSourceResult {
+    dataSource: DataSource;
+    showImageUrlWarning: boolean;
+}
+
 /**
  * Retrieve data and process it into a structured format.
  *
@@ -35,7 +40,7 @@ export interface DataSource {
  *   ]
  * }
  */
-export async function getDataSource(abortSignal?: AbortSignal): Promise<DataSource> {
+export async function getDataSource(abortSignal?: AbortSignal): Promise<GetDataSourceResult> { // Modified return type
     // Get existing Coda settings from plugin data
     const collection = await framer.getActiveManagedCollection();
     const [apiKey, docId, tableId] = await Promise.all([
@@ -49,7 +54,7 @@ export async function getDataSource(abortSignal?: AbortSignal): Promise<DataSour
     }
 
     // Use the existing getCodaDataSource function to fetch data
-    return getCodaDataSource(apiKey, docId, tableId, abortSignal);
+    return getCodaDataSource(apiKey, docId, tableId, abortSignal); // Will now return GetDataSourceResult
 }
 
 interface CodaColumn {
@@ -148,8 +153,7 @@ function mapCodaTypeToFramerType(column: CodaColumn): ManagedCollectionFieldInpu
             return {
                 id: column.id,
                 name: column.name,
-                type: 'collectionReference',
-                collectionId: column.id // Using column ID as collection ID since Coda doesn't provide direct mapping
+                type: 'string' // Changed from 'collectionReference' to 'string'
             }
         case 'url':
         case 'link':
@@ -169,7 +173,7 @@ function mapCodaTypeToFramerType(column: CodaColumn): ManagedCollectionFieldInpu
 }
 
 // Helper function to transform Coda values to Framer values
-function transformCodaValue(value: any, field: ManagedCollectionFieldInput, codaColumnType: string, use12HourTime?: boolean): FieldDataEntryInput {
+function transformCodaValue(value: any, field: ManagedCollectionFieldInput, codaColumnType: string, use12HourTime?: boolean): FieldDataEntryInput | null {
     // 1. Handle null/undefined based on Framer field.type
     if (value === null || value === undefined) {
         switch (field.type) {
@@ -200,8 +204,43 @@ function transformCodaValue(value: any, field: ManagedCollectionFieldInput, coda
     // 2. Main switch on field.type (Framer type)
     switch (field.type) {
         case 'number':
-            const num = Number(value);
-            return { type: 'number', value: isNaN(num) ? 0 : num };
+            let numericValue: number;
+            if (typeof value === 'number') {
+                numericValue = value;
+            } else if (typeof value === 'string') {
+                // Remove currency symbols, commas, and handle percentages
+                let cleanValue = value
+                    .replace(/[$£€¥]/g, '') // Remove common currency symbols
+                    .replace(/,/g, '')      // Remove commas
+                    .trim();
+                
+                // Handle percentage values
+                if (cleanValue.endsWith('%')) {
+                    cleanValue = cleanValue.slice(0, -1);
+                    const parsed = Number(cleanValue);
+                    if (!isNaN(parsed)) {
+                        numericValue = parsed / 100; // Convert percentage to decimal
+                    } else {
+                        console.warn(`Could not parse percentage value "${value}" for field ${field.name}. Falling back to 0.`);
+                        numericValue = 0;
+                    }
+                } else {
+                    const parsed = Number(cleanValue);
+                    if (!isNaN(parsed)) {
+                        numericValue = parsed;
+                    } else {
+                        console.warn(`Could not parse numeric value "${value}" for field ${field.name}. Falling back to 0.`);
+                        numericValue = 0;
+                    }
+                }
+            } else if (typeof value === 'object' && value !== null && 'value' in value && typeof value.value === 'number') {
+                // Handle case where Coda sends a value wrapper object
+                numericValue = value.value;
+            } else {
+                console.warn(`Unexpected value type for number field ${field.name}: ${JSON.stringify(value)}. Falling back to 0.`);
+                numericValue = 0;
+            }
+            return { type: 'number', value: numericValue };
         case 'boolean':
             return { type: 'boolean', value: Boolean(value) };
         case 'date': 
@@ -305,14 +344,12 @@ function transformCodaValue(value: any, field: ManagedCollectionFieldInput, coda
                     imageUrl = value.link;
                 }
             }
-            if (imageUrl) {
-                if (imageUrl.startsWith('/') && !imageUrl.startsWith('//')) {
-                    console.warn(`Potentially relative image URL found for ${field.name}: ${imageUrl}.`);
-                }
+            // Validate if imageUrl is an absolute URL
+            if (imageUrl && (imageUrl.startsWith('http://') || imageUrl.startsWith('https://'))) {
                 return { type: 'image', value: imageUrl }; 
             }
-            console.warn(`Unsupported image value for field ${field.name}: ${JSON.stringify(value)}. Falling back to empty image URL.`);
-            return { type: 'image', value: '' };
+            console.warn(`Invalid or non-absolute image URL for field ${field.name}: '${imageUrl}'. Skipping asset.`);
+            return null; // Return null if URL is not valid or not absolute
         }
 
         case 'file': { 
@@ -326,14 +363,12 @@ function transformCodaValue(value: any, field: ManagedCollectionFieldInput, coda
                     fileUrl = value.link;
                 }
             }
-            if (fileUrl) {
-                 if (fileUrl.startsWith('/') && !fileUrl.startsWith('//')) {
-                     console.warn(`Potentially relative file URL found for ${field.name}: ${fileUrl}.`);
-                }
+            // Validate if fileUrl is an absolute URL
+            if (fileUrl && (fileUrl.startsWith('http://') || fileUrl.startsWith('https://'))) {
                 return { type: 'file', value: fileUrl }; 
             }
-            console.warn(`Unsupported file value for field ${field.name}: ${JSON.stringify(value)}. Falling back to empty file URL.`);
-            return { type: 'file', value: '' };
+            console.warn(`Unsupported or non-absolute file value for field ${field.name}: '${fileUrl}'. Skipping asset.`);
+            return null; // Return null if URL is not valid or not absolute
         }
 
         case 'formattedText': 
@@ -388,11 +423,14 @@ export async function getCodaDataSource(
     docId: string,
     tableId: string,
     signal?: AbortSignal
-): Promise<DataSource> {
+): Promise<GetDataSourceResult> { // Modified return type
     const headers = {
         'Authorization': `Bearer ${apiKey}`,
         'Content-Type': 'application/json'
     }
+
+    let hasImageOrFileFields = false; // Track if any image/file fields exist
+    let hasValidImageOrFileUrls = false; // Track if any valid URLs are found
 
     // First, fetch the columns metadata
     const columnsUrl = `https://coda.io/apis/v1/docs/${docId}/tables/${tableId}/columns`
@@ -416,7 +454,13 @@ export async function getCodaDataSource(
         }))
 
     // Map columns to Framer fields with proper types and enum cases
-    const fields = columns.map(col => mapCodaTypeToFramerType(col))
+    const fields = columns.map(col => {
+        const mappedField = mapCodaTypeToFramerType(col);
+        if (mappedField.type === 'image' || mappedField.type === 'file') {
+            hasImageOrFileFields = true;
+        }
+        return mappedField;
+    });
     const fieldMap = new Map<string, ManagedCollectionFieldInput>(
         fields.map((field: ManagedCollectionFieldInput) => [field.id, field])
     )
@@ -458,18 +502,31 @@ export async function getCodaDataSource(
             const field = fieldMap.get(key)
             if (field) {
                 const codaType = codaColumnTypeMap.get(key) || 'text'; // Default to text if not found
-                // Pass the preference to transformCodaValue
-                fieldData[key] = transformCodaValue(value, field, codaType, use12HourTimePreference)
+                const transformedEntry = transformCodaValue(value, field, codaType, use12HourTimePreference)
+                if (transformedEntry !== null) {
+                    fieldData[key] = transformedEntry;
+                    if (field.type === 'image' || field.type === 'file') {
+                        // Check if the value is not an empty string, indicating a valid URL was processed
+                        if (transformedEntry.value && typeof transformedEntry.value === 'string' && transformedEntry.value.trim() !== '') {
+                            hasValidImageOrFileUrls = true;
+                        }
+                    }
+                }
             }
         }
         
         return fieldData
     })
 
+    const showImageUrlWarning = hasImageOrFileFields && !hasValidImageOrFileUrls;
+
     return {
-        id: tableId,
-        fields,
-        items,
+        dataSource: {
+            id: tableId,
+            fields,
+            items,
+        },
+        showImageUrlWarning,
     }
 }
 
@@ -496,10 +553,11 @@ export function mergeFieldsWithExistingFields(
 
 export async function syncCollection(
     collection: ManagedCollection,
-    dataSource: DataSource,
+    dataSourceResult: GetDataSourceResult, // Modified parameter type
     fields: readonly ManagedCollectionFieldInput[],
     slugField: ManagedCollectionFieldInput
 ) {
+    const { dataSource } = dataSourceResult; // Extract dataSource
     // Create a map of fields by ID for faster lookup
     const fieldMap = new Map(fields.map(field => [field.id, field]))
 
@@ -589,13 +647,13 @@ export async function syncExistingCollection(
     }
 
     try {
-        const dataSource = await getDataSource()
+        const dataSourceResult = await getDataSource() // Will now return GetDataSourceResult
         const existingFields = await collection.getFields()
 
         // Create a list of possible slug fields including the special _id field
         const possibleSlugFields = [
             { id: '_id', name: 'Row ID', type: 'string' as const },
-            ...dataSource.fields.filter(field => field.type === "string")
+            ...dataSourceResult.dataSource.fields.filter(field => field.type === "string")
         ]
         
         const slugField = possibleSlugFields.find(field => field.id === previousSlugFieldId)
@@ -628,7 +686,7 @@ export async function syncExistingCollection(
             return field;
         }) as ManagedCollectionFieldInput[];
 
-        await syncCollection(collection, dataSource, transformedFields, slugField)
+        await syncCollection(collection, dataSourceResult, transformedFields, slugField) // Pass dataSourceResult
         return { didSync: true }
     } catch (error) {
         console.error(error)

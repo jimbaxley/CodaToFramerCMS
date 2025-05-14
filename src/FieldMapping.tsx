@@ -1,6 +1,6 @@
 import { type ManagedCollectionFieldInput, type LocalizedValueUpdate, type EnumCaseData, framer, type ManagedCollection } from "framer-plugin"
 import { useEffect, useState } from "react"
-import { type DataSource, mergeFieldsWithExistingFields, syncCollection } from "./data"
+import { type GetDataSourceResult, mergeFieldsWithExistingFields, syncCollection } from "./data"
 
 interface FieldMappingRowProps {
     field: ManagedCollectionFieldInput
@@ -55,12 +55,14 @@ const initialFieldIds: ReadonlySet<string> = new Set()
 
 interface FieldMappingProps {
     collection: ManagedCollection
-    dataSource: DataSource
+    dataSourceResult: GetDataSourceResult
     initialSlugFieldId: string | null
     onBack: () => void
 }
 
-export function FieldMapping({ collection, dataSource, initialSlugFieldId, onBack }: FieldMappingProps) {
+export function FieldMapping({ collection, dataSourceResult, initialSlugFieldId, onBack }: FieldMappingProps) {
+    const { dataSource } = dataSourceResult;
+
     const [status, setStatus] = useState<"mapping-fields" | "loading-fields" | "syncing-collection">(
         initialSlugFieldId ? "loading-fields" : "mapping-fields"
     )
@@ -81,8 +83,8 @@ export function FieldMapping({ collection, dataSource, initialSlugFieldId, onBac
     const [ignoredFieldIds, setIgnoredFieldIds] = useState(initialFieldIds)
     const [use12HourTimeFormat, setUse12HourTimeFormat] = useState(false) // New state for time format
 
-    // Use the dataSource id directly since it's the table name from Coda
-    const dataSourceName = dataSource.id
+    // Use the dataSource id directly since it\'s the table name from Coda
+    const dataSourceName = dataSource.id // Uses destructured dataSource
 
     useEffect(() => {
         const abortController = new AbortController()
@@ -101,7 +103,7 @@ export function FieldMapping({ collection, dataSource, initialSlugFieldId, onBac
 
                 setFields(
                     mergeFieldsWithExistingFields(
-                        dataSource.fields,
+                        dataSource.fields, // Uses destructured dataSource
                         collectionFields.map(field => {
                             if (field.type === "enum" && field.cases) {
                                 return {
@@ -118,7 +120,7 @@ export function FieldMapping({ collection, dataSource, initialSlugFieldId, onBac
                 )
 
                 const existingFieldIds = new Set(collectionFields.map(field => field.id))
-                const ignoredFields = dataSource.fields.filter(sourceField => !existingFieldIds.has(sourceField.id))
+                const ignoredFields = dataSource.fields.filter(sourceField => !existingFieldIds.has(sourceField.id)) // Uses destructured dataSource
 
                 if (initialSlugFieldId) {
                     setIgnoredFieldIds(new Set(ignoredFields.map(field => field.id)))
@@ -136,7 +138,7 @@ export function FieldMapping({ collection, dataSource, initialSlugFieldId, onBac
         return () => {
             abortController.abort()
         }
-    }, [initialSlugFieldId, dataSource, collection])
+    }, [initialSlugFieldId, dataSource, collection]) // dataSource dependency remains as it's from dataSourceResult
 
     const changeFieldName = (fieldId: string, name: string) => {
         setFields(prevFields => {
@@ -195,11 +197,11 @@ export function FieldMapping({ collection, dataSource, initialSlugFieldId, onBac
 
             const fieldsToSync = sanitizedFields.filter(field => !ignoredFieldIds.has(field.id)) as ManagedCollectionFieldInput[]
 
-            await syncCollection(collection, dataSource, fieldsToSync, selectedSlugField)
+            await syncCollection(collection, dataSourceResult, fieldsToSync, selectedSlugField) // Pass full dataSourceResult
             await framer.closePlugin("Synchronization successful", { variant: "success" })
         } catch (error) {
             console.error(error)
-            framer.notify(`Failed to sync collection "${dataSource.id}". Check the logs for more details.`, {
+            framer.notify(`Failed to sync collection "${dataSource.id}". Check the logs for more details.`, { // Uses destructured dataSource
                 variant: "error",
             })
         } finally {
@@ -295,7 +297,7 @@ export function FieldMapping({ collection, dataSource, initialSlugFieldId, onBac
                             <FieldMappingRow
                                 key={`field-${field.id}`}
                                 field={field}
-                                originalFieldName={dataSource.fields.find(sourceField => sourceField.id === field.id)?.name}
+                                originalFieldName={dataSource.fields.find(sourceField => sourceField.id === field.id)?.name} // Uses destructured dataSource
                                 disabled={ignoredFieldIds.has(field.id)}
                                 onToggleDisabled={toggleFieldDisabledState}
                                 onNameChange={changeFieldName}
