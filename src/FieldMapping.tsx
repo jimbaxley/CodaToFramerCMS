@@ -1,4 +1,4 @@
-import { type ManagedCollectionFieldInput, type LocalizedValueUpdate, type EnumCaseData, framer, type ManagedCollection } from "framer-plugin"
+import { type ManagedCollectionFieldInput, type EnumCaseData, framer, type ManagedCollection } from "framer-plugin"
 import { useEffect, useState } from "react"
 import { type GetDataSourceResult, mergeFieldsWithExistingFields, syncCollection } from "./data"
 
@@ -213,7 +213,7 @@ export function FieldMapping({ collection, dataSourceResult, initialSlugFieldId,
         const isChecked = event.target.checked
         setUse12HourTimeFormat(isChecked)
         await framer.setPluginData("use12HourTimeFormat", isChecked ? "true" : "false")
-        framer.notify(`Time format set to ${isChecked ? "12-hour" : "24-hour"}. You may need to re-sync for changes to apply to existing data.`, { variant: "success", timeout: 5000 })
+        framer.notify(`Time format set to ${isChecked ? "12-hour" : "24-hour"}. You may need to re-sync for changes to apply to existing data.`, { variant: "success" })
     }
 
     useEffect(() => {
@@ -222,7 +222,7 @@ export function FieldMapping({ collection, dataSourceResult, initialSlugFieldId,
                 event.preventDefault()
                 const target = event.target as HTMLElement
                 const checkbox = target.closest("label")?.querySelector("input[type='checkbox']")
-                if (checkbox) {
+                if (checkbox && checkbox instanceof HTMLElement) {
                     checkbox.click()
                 }
             }

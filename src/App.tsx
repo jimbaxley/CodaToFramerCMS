@@ -2,7 +2,7 @@ import "./App.css"
 
 import { framer, type ManagedCollection } from "framer-plugin"
 import { useEffect, useLayoutEffect, useState } from "react"
-import { type DataSource, getDataSource, getCodaDataSource, type GetDataSourceResult, getCodaDocs, getCodaTables } from "./data"
+import { getDataSource, getCodaDataSource, type GetDataSourceResult, getCodaDocs, getCodaTables } from "./data"
 import { FieldMapping } from "./FieldMapping"
 import { SelectDataSource } from "./SelectDataSource"
 

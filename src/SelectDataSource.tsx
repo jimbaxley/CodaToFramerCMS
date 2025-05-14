@@ -12,7 +12,6 @@ export function SelectDataSource({ onSelectDataSource }: SelectDataSourceProps) 
     const [docs, setDocs] = useState<CodaDoc[]>([])
     const [selectedDoc, setSelectedDoc] = useState<CodaDoc | null>(null)
     const [tables, setTables] = useState<CodaTable[]>([])
-    const [selectedTable, setSelectedTable] = useState<CodaTable | null>(null)
     const [isLoading, setIsLoading] = useState(false)
 
     // Check for existing credentials on mount
@@ -141,7 +140,6 @@ export function SelectDataSource({ onSelectDataSource }: SelectDataSourceProps) 
     }
 
     const handleTableSelect = (table: CodaTable) => {
-        setSelectedTable(table)
         onSelectDataSource({ 
             apiKey, 
             docId: selectedDoc?.id || '', 
