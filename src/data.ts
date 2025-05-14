@@ -1,12 +1,12 @@
 import {
     type ManagedCollectionFieldInput,
     type FieldDataEntryInput,
-    type LocalizedValueUpdate,
-    type EnumCaseData,
     framer,
     type ManagedCollection,
     type ManagedCollectionItemInput,
+    type EnumCaseDataInput
 } from "framer-plugin"
+import { type CodaColumn, type CodaDoc, type CodaTable, type DataSource, type GetDataSourceResult, type EnumCase } from "./types"
 
 export const PLUGIN_KEYS = {
     DATA_SOURCE_ID: "dataSourceId",
@@ -561,11 +561,11 @@ export function mergeFieldsWithExistingFields(
 
 export async function syncCollection(
     collection: ManagedCollection,
-    dataSourceResult: GetDataSourceResult, // Modified parameter type
+    dataSourceResult: GetDataSourceResult,
     fields: readonly ManagedCollectionFieldInput[],
     slugField: ManagedCollectionFieldInput
 ) {
-    const { dataSource } = dataSourceResult; // Extract dataSource
+    const { dataSource } = dataSourceResult;
     // Create a map of fields by ID for faster lookup
     const fieldMap = new Map(fields.map(field => [field.id, field]))
 
@@ -619,19 +619,26 @@ export async function syncCollection(
         })
     }
 
+    // Transform the fields to ensure proper typing for enum cases
     const transformedFields = fields.map(field => {
-        if (field.type === "enum") {
+        if (field.type === "enum" && "cases" in field) {
             return {
                 ...field,
-                cases: (field.cases || []).map((caseData: EnumCaseData, idx: number) => ({
+                cases: (field.cases || []).map((caseData: EnumCaseDataInput, idx) => ({
                     id: caseData.id || `case-${idx}`,
                     name: caseData.name,
-                    nameByLocale: caseData.nameByLocale ?? {}
+                    nameByLocale: {
+                        en: {
+                            action: "set" as const,
+                            value: caseData.name,
+                            needsReview: false
+                        }
+                    }
                 }))
             }
         }
         return field
-    }) as ManagedCollectionFieldInput[]
+    })
 
     await collection.setFields(transformedFields)
     await collection.removeItems(Array.from(unsyncedItems))
@@ -675,7 +682,7 @@ export async function syncExistingCollection(
             if (field.type === "enum" && field.cases) {
                 return {
                     ...field,
-                    cases: field.cases.map((c: EnumCaseData, idx: number) => ({
+                    cases: field.cases.map((c: EnumCase, idx: number) => ({
                         id: c.id || `case-${idx}`,
                         name: c.name,
                         nameByLocale: Object.fromEntries(

@@ -1,6 +1,7 @@
-import { type ManagedCollectionFieldInput, type EnumCaseData, framer, type ManagedCollection } from "framer-plugin"
+import { type ManagedCollectionFieldInput, framer, type ManagedCollection } from "framer-plugin"
 import { useEffect, useState } from "react"
 import { type GetDataSourceResult, mergeFieldsWithExistingFields, syncCollection } from "./data"
+import { type EnumCase } from "./types"
 
 interface FieldMappingRowProps {
     field: ManagedCollectionFieldInput
@@ -184,24 +185,32 @@ export function FieldMapping({ collection, dataSourceResult, initialSlugFieldId,
                 if (field.type === "enum" && "cases" in field) {
                     return {
                         ...sanitizedField,
-                        cases: (field.cases || []).map((caseData: EnumCaseData, idx: number) => ({
-                            id: caseData.id || `case-${idx}`,
-                            name: caseData.name,
-                            nameByLocale: caseData.nameByLocale ?? {}
-                        }))
+                        cases: (field.cases || []).map((caseData, idx) => {
+                            const enumCase: EnumCase = {
+                                id: caseData.id || `case-${idx}`,
+                                name: caseData.name,
+                                nameByLocale: {
+                                    en: {
+                                        action: "set" as const,
+                                        value: caseData.name,
+                                        needsReview: false
+                                    }
+                                }
+                            }
+                            return enumCase
+                        })
                     }
                 }
 
                 return sanitizedField
             })
 
-            const fieldsToSync = sanitizedFields.filter(field => !ignoredFieldIds.has(field.id)) as ManagedCollectionFieldInput[]
-
-            await syncCollection(collection, dataSourceResult, fieldsToSync, selectedSlugField) // Pass full dataSourceResult
+            const fieldsToSync = sanitizedFields.filter(field => !ignoredFieldIds.has(field.id))
+            await syncCollection(collection, dataSourceResult, fieldsToSync, selectedSlugField)
             await framer.closePlugin("Synchronization successful", { variant: "success" })
         } catch (error) {
             console.error(error)
-            framer.notify(`Failed to sync collection "${dataSource.id}". Check the logs for more details.`, { // Uses destructured dataSource
+            framer.notify(`Failed to sync collection "${dataSource.id}". Check the logs for more details.`, {
                 variant: "error",
             })
         } finally {
