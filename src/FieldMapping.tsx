@@ -57,9 +57,10 @@ interface FieldMappingProps {
     collection: ManagedCollection
     dataSource: DataSource
     initialSlugFieldId: string | null
+    onBack: () => void
 }
 
-export function FieldMapping({ collection, dataSource, initialSlugFieldId }: FieldMappingProps) {
+export function FieldMapping({ collection, dataSource, initialSlugFieldId, onBack }: FieldMappingProps) {
     const [status, setStatus] = useState<"mapping-fields" | "loading-fields" | "syncing-collection">(
         initialSlugFieldId ? "loading-fields" : "mapping-fields"
     )
@@ -78,12 +79,20 @@ export function FieldMapping({ collection, dataSource, initialSlugFieldId }: Fie
 
     const [fields, setFields] = useState(initialManagedCollectionFields)
     const [ignoredFieldIds, setIgnoredFieldIds] = useState(initialFieldIds)
+    const [use12HourTimeFormat, setUse12HourTimeFormat] = useState(false) // New state for time format
 
     // Use the dataSource id directly since it's the table name from Coda
     const dataSourceName = dataSource.id
 
     useEffect(() => {
         const abortController = new AbortController()
+
+        // Load time format preference
+        framer.getPluginData("use12HourTimeFormat").then(storedPreference => {
+            if (!abortController.signal.aborted) {
+                setUse12HourTimeFormat(storedPreference === "true")
+            }
+        })
 
         collection
             .getFields()
@@ -198,6 +207,31 @@ export function FieldMapping({ collection, dataSource, initialSlugFieldId }: Fie
         }
     }
 
+    const handleTimeFormatChange = async (event: React.ChangeEvent<HTMLInputElement>) => {
+        const isChecked = event.target.checked
+        setUse12HourTimeFormat(isChecked)
+        await framer.setPluginData("use12HourTimeFormat", isChecked ? "true" : "false")
+        framer.notify(`Time format set to ${isChecked ? "12-hour" : "24-hour"}. You may need to re-sync for changes to apply to existing data.`, { variant: "success", timeout: 5000 })
+    }
+
+    useEffect(() => {
+        const handle = (event: KeyboardEvent) => {
+            if (event.key === "Enter") {
+                event.preventDefault()
+                const target = event.target as HTMLElement
+                const checkbox = target.closest("label")?.querySelector("input[type='checkbox']")
+                if (checkbox) {
+                    checkbox.click()
+                }
+            }
+        }
+
+        document.addEventListener("keydown", handle)
+        return () => {
+            document.removeEventListener("keydown", handle)
+        }
+    }, [])
+
     if (isLoadingFields) {
         return (
             <main className="loading">
@@ -209,49 +243,73 @@ export function FieldMapping({ collection, dataSource, initialSlugFieldId }: Fie
     return (
         <main className="framer-hide-scrollbar mapping">
             <hr className="sticky-divider" />
-            <form onSubmit={handleSubmit}>
-                <label className="slug-field" htmlFor="slugField">
-                    Slug Field
-                    <select
-                        required
-                        name="slugField"
-                        className="field-input"
-                        value={selectedSlugField ? selectedSlugField.id : ""}
-                        onChange={event => {
-                            const selectedFieldId = event.target.value
-                            const selectedField = possibleSlugFields.find(field => field.id === selectedFieldId)
-                            if (!selectedField) return
-                            setSelectedSlugField(selectedField)
-                        }}
-                    >
-                        {possibleSlugFields.map(possibleSlugField => {
-                            return (
-                                <option key={`slug-field-${possibleSlugField.id}`} value={possibleSlugField.id}>
-                                    {possibleSlugField.name} ({possibleSlugField.id})
-                                </option>
-                            )
-                        })}
-                    </select>
-                </label>
+            {/* The form now acts as the step-form-wrapper */}
+            <form onSubmit={handleSubmit} className="step-form-wrapper">
+                {/* Content area for slug field and fields list */}
+                <div className="content-scrollable-area">
+                    {/* Add Time Format Preference Checkbox at the top */}
+                    <div className="time-format-preference" style={{ marginBottom: "20px", padding: "10px", border: "1px solid #eee", borderRadius: "4px" }}>
+                        <label htmlFor="timeFormatCheckbox" style={{ display: "flex", alignItems: "center", cursor: "pointer" }}>
+                            <input
+                                type="checkbox"
+                                id="timeFormatCheckbox"
+                                checked={use12HourTimeFormat}
+                                onChange={handleTimeFormatChange}
+                                style={{ marginRight: "8px" }}
+                            />
+                            Use 12-hour time format (e.g., 1:30 PM)
+                        </label>
+                        <p style={{ fontSize: "0.9em", color: "#666", marginTop: "5px" }}>
+                            If unchecked, 24-hour format (e.g., 13:30:00) will be used for time fields.
+                        </p>
+                    </div>
 
-                <div className="fields">
-                    <span className="fields-column">Column</span>
-                    <span>Field</span>
-                    {fields.map(field => (
-                        <FieldMappingRow
-                            key={`field-${field.id}`}
-                            field={field}
-                            originalFieldName={dataSource.fields.find(sourceField => sourceField.id === field.id)?.name}
-                            disabled={ignoredFieldIds.has(field.id)}
-                            onToggleDisabled={toggleFieldDisabledState}
-                            onNameChange={changeFieldName}
-                        />
-                    ))}
-                </div>
+                    <label className="slug-field" htmlFor="slugField">
+                        Slug Field
+                        <select
+                            required
+                            name="slugField"
+                            className="field-input"
+                            value={selectedSlugField ? selectedSlugField.id : ""}
+                            onChange={event => {
+                                const selectedFieldId = event.target.value
+                                const selectedField = possibleSlugFields.find(field => field.id === selectedFieldId)
+                                if (!selectedField) return
+                                setSelectedSlugField(selectedField)
+                            }}
+                        >
+                            {possibleSlugFields.map(possibleSlugField => {
+                                return (
+                                    <option key={`slug-field-${possibleSlugField.id}`} value={possibleSlugField.id}>
+                                        {possibleSlugField.name} ({possibleSlugField.id})
+                                    </option>
+                                )
+                            })}
+                        </select>
+                    </label>
+
+                    <div className="fields">
+                        <span className="fields-column">Column</span>
+                        <span>Field</span>
+                        {fields.map(field => (
+                            <FieldMappingRow
+                                key={`field-${field.id}`}
+                                field={field}
+                                originalFieldName={dataSource.fields.find(sourceField => sourceField.id === field.id)?.name}
+                                disabled={ignoredFieldIds.has(field.id)}
+                                onToggleDisabled={toggleFieldDisabledState}
+                                onNameChange={changeFieldName}
+                            />
+                        ))}
+                    </div>
+                </div> {/* End of content-scrollable-area */}
 
                 <footer>
                     <hr className="sticky-top" />
-                    <button disabled={isSyncing} tabIndex={0}>
+                    <button type="button" onClick={onBack} className="back-button">
+                        Back
+                    </button>
+                    <button disabled={isSyncing} tabIndex={0} className="back-button">
                         {isSyncing ? (
                             <div className="framer-spinner" />
                         ) : (

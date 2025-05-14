@@ -4,11 +4,11 @@ A Framer plugin that allows you to connect your Coda documents as a data source 
 
 ## Features
 
-- Connect to Coda documents using API key
+- Connect to Coda documents using API key - see https://coda.io/developers/apis/v1 for details
 - Select tables as data sources
 - Map Coda fields to Framer fields
-- Automatic type conversion and validation
 - Support for various field types including text, numbers, dates, links, and more
+- Support for images using the ImageURL Coda Pack (https://coda.io/packs/imageurl-10797)
 
 ## Development
 

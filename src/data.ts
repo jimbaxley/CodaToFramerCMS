@@ -116,11 +116,11 @@ function mapCodaTypeToFramerType(column: CodaColumn): ManagedCollectionFieldInpu
                 name: column.name,
                 type: 'date' // Framer date type (will store full ISO string with time)
             }
-        case 'time': // Coda time-only (speculative type)
+        case 'time': // Coda time-only
              return {
                 id: column.id,
                 name: column.name,
-                type: 'string' // Framer string type
+                type: 'string' // Framer string type for time-only values
             }
         case 'image':
             return {
@@ -169,89 +169,196 @@ function mapCodaTypeToFramerType(column: CodaColumn): ManagedCollectionFieldInpu
 }
 
 // Helper function to transform Coda values to Framer values
-function transformCodaValue(value: any, field: ManagedCollectionFieldInput): FieldDataEntryInput {
+function transformCodaValue(value: any, field: ManagedCollectionFieldInput, codaColumnType: string, use12HourTime?: boolean): FieldDataEntryInput {
+    // 1. Handle null/undefined based on Framer field.type
     if (value === null || value === undefined) {
-        // Return appropriate default value based on type
-        // For date types, Framer might expect a valid date string or null.
-        // Returning empty string for simplicity, but might need adjustment based on Framer's strictness.
-        if (field.type === 'date') {
-            // Framer's date field might prefer null or a specific empty state
-            // For now, let's send an empty string, which might be ignored or cause issues.
-            // A better approach might be to not set the field if value is null/undefined.
-            return { type: 'string', value: '' } // Or handle as per Framer's expectation for empty dates
+        switch (field.type) {
+            case 'string':
+                return { type: 'string', value: '' };
+            case 'number':
+                return { type: 'number', value: 0 }; 
+            case 'boolean':
+                return { type: 'boolean', value: false };
+            case 'date':
+                return { type: 'date', value: '' }; 
+            case 'image':
+                return { type: 'image', value: '' }; // Value is string URL
+            case 'file':
+                return { type: 'file', value: '' }; // Value is string URL
+            case 'formattedText':
+                return { type: 'formattedText', value: '' };
+            case 'link':
+                return { type: 'link', value: '' }; // Value is string URL/href
+            case 'collectionReference':
+                return { type: 'collectionReference', value: '' }; // Value is single string ID
+            default:
+                console.warn(`Unknown field type "${field.type}" for null/undefined value. Defaulting to empty string.`);
+                return { type: 'string', value: '' };
         }
-        return { type: 'string', value: '' }
     }
 
-    // For select/scale fields from Coda, extract the display name
-    if (typeof value === 'object' && value !== null) {
-        if ('name' in value) {
-            return { type: 'string', value: String(value.name) }
-        }
-        if ('display' in value) {
-            return { type: 'string', value: String(value.display) }
-        }
-    }
-
-    // Handle all other types
+    // 2. Main switch on field.type (Framer type)
     switch (field.type) {
         case 'number':
-            return { type: 'number', value: Number(value) }
+            const num = Number(value);
+            return { type: 'number', value: isNaN(num) ? 0 : num };
         case 'boolean':
-            return { type: 'boolean', value: Boolean(value) }
-        case 'date': // Covers Coda 'date' and 'datetime' mapped to Framer 'date'
-            // Ensure the value is a valid date string or can be parsed into one.
-            // Coda likely provides ISO strings or similar standard formats.
+            return { type: 'boolean', value: Boolean(value) };
+        case 'date': 
             try {
-                return { type: 'date', value: new Date(value).toISOString() }
-            } catch (e) {
-                console.warn(`Invalid date value encountered for field ${field.name}: ${value}. Falling back to empty string.`);
-                return { type: 'string', value: '' } // Fallback for invalid date values
-            }
-        case 'image':
-        case 'file': {
-            const urlStr = String(value);
-            try {
-                // Try to construct URL to validate it
-                new URL(urlStr);
-                return { type: field.type, value: urlStr }
-            } catch (e) {
-                // If URL is invalid, check if it's a relative path and make it absolute
-                if (urlStr.startsWith('/')) {
-                    return { type: field.type, value: `https://coda.io${urlStr}` }
+                const dateObj = new Date(value);
+                if (isNaN(dateObj.getTime())) {
+                    console.warn(`Invalid date value encountered for field ${field.name}: ${value}. Falling back to empty string.`);
+                    return { type: 'date', value: '' };
                 }
-                // If all else fails, return empty string to prevent invalid URL errors
-                console.warn(`Invalid URL found for ${field.type} field: ${urlStr}`);
-                return { type: field.type, value: '' }
+                if (codaColumnType === 'date') { 
+                    const year = dateObj.getUTCFullYear();
+                    const month = (dateObj.getUTCMonth() + 1).toString().padStart(2, '0');
+                    const day = dateObj.getUTCDate().toString().padStart(2, '0');
+                    return { type: 'date', value: `${year}-${month}-${day}T00:00:00.000Z` };
+                }
+                return { type: 'date', value: dateObj.toISOString() };
+            } catch (e: any) {
+                console.warn(`Error parsing date value for field ${field.name}: ${value} (Error: ${e.message}). Falling back to empty string.`);
+                return { type: 'date', value: '' };
             }
-        }
-        case 'formattedText':
-            return { type: 'formattedText', value: String(value) }
-        case 'collectionReference':
-            if (Array.isArray(value)) {
-                return { 
-                    type: 'collectionReference',
-                    value: value[0]?.id || ''
+        case 'string': 
+            if (codaColumnType === 'time') { 
+                try {
+                    const dateObj = new Date(value); // Coda sends time as a full datetime string
+                    if (isNaN(dateObj.getTime())) {
+                        console.warn(`Invalid time value encountered for field ${field.name}: ${value}. Falling back to empty string.`);
+                        return { type: 'string', value: '' };
+                    }
+                    
+                    const hours24 = dateObj.getUTCHours();
+                    const minutes = dateObj.getUTCMinutes();
+                    const seconds = dateObj.getUTCSeconds();
+
+                    if (use12HourTime) {
+                        const ampm = hours24 >= 12 ? 'PM' : 'AM';
+                        let hours12 = hours24 % 12;
+                        hours12 = hours12 ? hours12 : 12; // Convert 0 (midnight) to 12, and 12 (noon) to 12
+                        
+                        const stringHours12 = hours12.toString(); // e.g., "1", "12"
+                        const paddedMinutes = minutes.toString().padStart(2, '0');
+                        // Omitting seconds for typical 12-hour display, add if needed:
+                        // const paddedSeconds = seconds.toString().padStart(2, '0');
+                        // return { type: 'string', value: `${stringHours12}:${paddedMinutes}:${paddedSeconds} ${ampm}` };
+                        return { type: 'string', value: `${stringHours12}:${paddedMinutes} ${ampm}` };
+                    } else {
+                        // Default to 24-hour format with seconds
+                        const paddedHours24 = hours24.toString().padStart(2, '0');
+                        const paddedMinutes = minutes.toString().padStart(2, '0');
+                        const paddedSeconds = seconds.toString().padStart(2, '0');
+                        return { type: 'string', value: `${paddedHours24}:${paddedMinutes}:${paddedSeconds}` };
+                    }
+                } catch (e: any) {
+                    console.warn(`Error parsing time value for field ${field.name}: ${value} (Error: ${e.message}). Falling back to empty string.`);
+                    return { type: 'string', value: '' };
                 }
             }
-            return { 
-                type: 'collectionReference',
-                value: typeof value === 'object' ? value.id || '' : String(value)
+            if (typeof value === 'object' && value !== null) {
+                if ('name' in value && typeof value.name === 'string') {
+                    return { type: 'string', value: value.name };
+                }
+                if ('display' in value && typeof value.display === 'string') { 
+                    return { type: 'string', value: value.display };
+                }
+                try {
+                    return { type: 'string', value: JSON.stringify(value) };
+                } catch (e) {
+                    return { type: 'string', value: '[unstringifiable object]' };
+                }
             }
-        case 'link': {
-            const urlStr = String(value);
-            try {
-                // Validate URL
-                new URL(urlStr);
-                return { type: 'link', value: urlStr }
-            } catch (e) {
-                // If URL is invalid, return empty string to prevent errors
-                console.warn(`Invalid URL found for link field: ${urlStr}`);
-                return { type: 'link', value: '' }
+            return { type: 'string', value: String(value) };
+
+        case 'image': { 
+            let imageUrl = '';
+            if (typeof value === 'string') {
+                imageUrl = value;
+            } else if (typeof value === 'object' && value !== null) {
+                if ('url' in value && typeof value.url === 'string') {
+                    imageUrl = value.url;
+                } else if ('link' in value && typeof value.link === 'string') { 
+                    imageUrl = value.link;
+                }
             }
+            if (imageUrl) {
+                if (imageUrl.startsWith('/') && !imageUrl.startsWith('//')) {
+                    console.warn(`Potentially relative image URL found for ${field.name}: ${imageUrl}.`);
+                }
+                return { type: 'image', value: imageUrl }; 
+            }
+            console.warn(`Unsupported image value for field ${field.name}: ${JSON.stringify(value)}. Falling back to empty image URL.`);
+            return { type: 'image', value: '' };
         }
+
+        case 'file': { 
+            let fileUrl = '';
+            if (typeof value === 'string') { 
+                fileUrl = value;
+            } else if (typeof value === 'object' && value !== null) {
+                if ('url' in value && typeof value.url === 'string') {
+                    fileUrl = value.url;
+                } else if ('link' in value && typeof value.link === 'string') { 
+                    fileUrl = value.link;
+                }
+            }
+            if (fileUrl) {
+                 if (fileUrl.startsWith('/') && !fileUrl.startsWith('//')) {
+                     console.warn(`Potentially relative file URL found for ${field.name}: ${fileUrl}.`);
+                }
+                return { type: 'file', value: fileUrl }; 
+            }
+            console.warn(`Unsupported file value for field ${field.name}: ${JSON.stringify(value)}. Falling back to empty file URL.`);
+            return { type: 'file', value: '' };
+        }
+
+        case 'formattedText': 
+            return { type: 'formattedText', value: String(value) };
+
+        case 'link': { 
+            let linkUrl = '';
+            if (typeof value === 'object' && value !== null && 'url' in value && typeof value.url === 'string') {
+                linkUrl = value.url;
+            } else if (typeof value === 'string') { 
+                linkUrl = value;
+            }
+            if (linkUrl) {
+                return { type: 'link', value: linkUrl }; 
+            }
+            console.warn(`Unsupported link value for field ${field.name}: ${JSON.stringify(value)}. Falling back to empty link URL.`);
+            return { type: 'link', value: '' };
+        }
+        
+        case 'collectionReference': { 
+            let finalItemId = '';
+            const processItem = (item: any): string | null => {
+                if (typeof item === 'string') return item;
+                if (typeof item === 'object' && item !== null) {
+                    if ('id'in item && typeof item.id === 'string') return item.id;
+                    if ('@id'in item && typeof item['@id'] === 'string') return item['@id'];
+                }
+                return null;
+            };
+            if (Array.isArray(value)) { 
+                const firstValidId = value.map(processItem).find(id => id !== null);
+                if (firstValidId) finalItemId = firstValidId;
+            } else { 
+                const singleId = processItem(value);
+                if (singleId) finalItemId = singleId;
+            }
+            return { type: 'collectionReference', value: finalItemId }; 
+        }
+
         default:
-            return { type: 'string', value: String(value) }
+            console.warn(
+                `Unhandled Framer field type "${field.type}" in transformCodaValue ` +
+                `for Coda column type "${codaColumnType}" and value: ${JSON.stringify(value)}. ` +
+                `Falling back to string representation.`
+            );
+            return { type: 'string', value: String(value) };
     }
 }
 
@@ -292,6 +399,15 @@ export async function getCodaDataSource(
     const fieldMap = new Map<string, ManagedCollectionFieldInput>(
         fields.map((field: ManagedCollectionFieldInput) => [field.id, field])
     )
+    // Store original Coda column types
+    const codaColumnTypeMap = new Map<string, string>(
+        columns.map(col => [col.id, col.format.type.toLowerCase()])
+    )
+
+    // TODO: In a future step, retrieve user preference for 12-hour time format here.
+    // For example: const use12HourTimePreference = await framer.getPluginData("use12HourTimeFormat") === "true";
+    const use12HourTimePreferenceRaw = await framer.getPluginData("use12HourTimeFormat");
+    const use12HourTimePreference = use12HourTimePreferenceRaw === "true";
 
     // Then fetch the rows
     const rowsUrl = `https://coda.io/apis/v1/docs/${docId}/tables/${tableId}/rows`
@@ -320,7 +436,9 @@ export async function getCodaDataSource(
             // Only include fields that are in our field map
             const field = fieldMap.get(key)
             if (field) {
-                fieldData[key] = transformCodaValue(value, field)
+                const codaType = codaColumnTypeMap.get(key) || 'text'; // Default to text if not found
+                // Pass the preference to transformCodaValue
+                fieldData[key] = transformCodaValue(value, field, codaType, use12HourTimePreference)
             }
         }
         
@@ -461,9 +579,7 @@ export async function syncExistingCollection(
         
         const slugField = possibleSlugFields.find(field => field.id === previousSlugFieldId)
         if (!slugField) {
-            framer.notify(`No field matches the slug field id "${previousSlugFieldId}". Sync will not be performed.`, {
-                variant: "error",
-            })
+            console.error(`No field matches the slug field id "${previousSlugFieldId}". Sync will not be performed.`)
             return { didSync: false }
         }
 
@@ -486,18 +602,16 @@ export async function syncExistingCollection(
                             ])
                         )
                     }))
-                }
+                }; // Added missing closing brace
             }
-            return field
-        }) as ManagedCollectionFieldInput[]
+            return field;
+        }) as ManagedCollectionFieldInput[];
 
         await syncCollection(collection, dataSource, transformedFields, slugField)
         return { didSync: true }
     } catch (error) {
         console.error(error)
-        framer.notify(`Failed to sync collection "${previousDataSourceId}". Check browser console for more details.`, {
-            variant: "error",
-        })
+        console.error(`Failed to sync collection "${previousDataSourceId}". Check browser console for more details.`)
         return { didSync: false }
     }
 }

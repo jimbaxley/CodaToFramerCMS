@@ -1,8 +1,6 @@
 import { framer } from "framer-plugin"
 import { useState, useEffect } from "react"
 import { getCodaDocs, getCodaTables, type CodaDoc, type CodaTable } from "./data"
-// Removed CODAIcon import
-// Removed BothIcon import, will use direct path for /public/both.svg
 
 interface SelectDataSourceProps {
     onSelectDataSource: (config: { apiKey: string; docId: string; tableId: string }) => void
@@ -100,21 +98,23 @@ export function SelectDataSource({ onSelectDataSource }: SelectDataSourceProps) 
 
     return (
         <main className="framer-hide-scrollbar setup">
+            <hr className="sticky-divider" /> {/* Added sticky divider */}
+
             {step === 'api-key' && (
-                <div className="intro-screen">
-                   
-                    <img src="/both.svg" alt="Connect Coda and Framer" className="welcome-graphic-intro" />
-                    <h2>Connect Coda to Framer's CMS:</h2>
-                    <ol className="steps-list">
-                        <li>Enter your Coda API Key below.</li>
-                        <li>Select your Coda Doc.</li>
-                        <li>Choose your Table as a data source.</li>
-                    </ol>
-                    <p className="api-docs-link">
-                            Need help?<br></br> Visit the <a href="https://coda.io/developers/apis/v1" target="_blank" rel="noopener noreferrer">Coda API Documentation</a>.
+                // Form now acts as the step-form-wrapper
+                <form onSubmit={handleApiKeySubmit} className="api-key-form step-form-wrapper" id="apiKeyForm">
+                    {/* Content moved into a content-scrollable-area div */}
+                    <div className="intro-screen content-scrollable-area">
+                        <img src="/both.svg" alt="Connect Coda and Framer" className="welcome-graphic-intro" />
+                        <h2>Connect Coda to Framer's CMS:</h2>
+                        <ol className="steps-list">
+                            <li>Enter your Coda API Key below.</li>
+                            <li>Select your Coda Doc.</li>
+                            <li>Choose your Table as a data source.</li>
+                        </ol>
+                        <p className="api-docs-link">
+                            Need help?<br></br> Visit the <a href="https://github.com/jimbaxley/CodaToFramerCMS/blob/main/README.md" target="_blank" rel="noopener noreferrer">Github Documentation</a>.
                         </p>
-                    <form onSubmit={handleApiKeySubmit} className="api-key-form">
-                        
                         <input
                             id="coda-api-key-input"
                             type="text"
@@ -123,45 +123,58 @@ export function SelectDataSource({ onSelectDataSource }: SelectDataSourceProps) 
                             placeholder="Enter your Coda API key"
                             required
                         />
-                        
-                        <button type="submit">Next</button>
-                    </form>
-                </div>
+                    </div>
+                    <footer>
+                        <hr className="sticky-top" />
+                        <button type="submit" form="apiKeyForm" className="back-button">Next</button>
+                    </footer>
+                </form>
             )}
 
             {step === 'select-doc' && (
-                <div className="selection-list">
-                    <h2>Select a Doc</h2>
-                    {docs.map(doc => (
-                        <button
-                            key={doc.id}
-                            className="list-item"
-                            onClick={() => handleDocSelect(doc)}
-                        >
-                            {doc.name}
+                <div className="step-form-wrapper"> {/* Added step-form-wrapper */}
+                    <div className="selection-list content-scrollable-area"> {/* Added content-scrollable-area */}
+                        <h2>Select a Doc</h2>
+                        {docs.map(doc => (
+                            <button
+                                key={doc.id}
+                                className="list-item"
+                                onClick={() => handleDocSelect(doc)}
+                            >
+                                {doc.name}
+                            </button>
+                        ))}
+                    </div>
+                    <footer>
+                        <hr className="sticky-top" />
+                        <button type="button" onClick={() => setStep('api-key')} className="back-button">
+                            Back
                         </button>
-                    ))}
-                    <button type="button" onClick={() => setStep('api-key')} className="back-button">
-                        Back
-                    </button>
+                    </footer>
                 </div>
             )}
 
             {step === 'select-table' && (
-                <div className="selection-list">
-                    <h2>Select a Table</h2>
-                    {tables.map(table => (
-                        <button
-                            key={table.id}
-                            className="list-item"
-                            onClick={() => handleTableSelect(table)}
-                        >
-                            {table.name}
+                <div className="step-form-wrapper"> {/* Added step-form-wrapper */}
+                    <div className="selection-list content-scrollable-area"> {/* Added content-scrollable-area */}
+                        <h2>Select a Table</h2>
+                        {tables.map(table => (
+                            <button
+                                key={table.id}
+                                className="list-item"
+                                onClick={() => handleTableSelect(table)}
+                            >
+                                {table.name}
+                            </button>
+                        ))}
+                        {/* Removed Time Format Preference Checkbox from here */}
+                    </div>
+                    <footer>
+                        <hr className="sticky-top" />
+                        <button type="button" onClick={() => setStep('select-doc')} className="back-button">
+                            Back
                         </button>
-                    ))}
-                    <button type="button" onClick={() => setStep('select-doc')} className="back-button">
-                        Back
-                    </button>
+                    </footer>
                 </div>
             )}
         </main>

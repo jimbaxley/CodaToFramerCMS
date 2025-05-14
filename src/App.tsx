@@ -35,6 +35,14 @@ export function App({ collection, previousDataSourceId, previousSlugFieldId }: A
         }
     }
 
+    const handleGoBackToDataSourceSelection = () => {
+        setDataSource(null)
+        // Clear stored Coda credentials when going back
+        collection.setPluginData('apiKey', null)
+        collection.setPluginData('docId', null)
+        collection.setPluginData('tableId', null)
+    }
+
     useLayoutEffect(() => {
         const hasDataSourceSelected = Boolean(dataSource)
 
@@ -89,5 +97,5 @@ export function App({ collection, previousDataSourceId, previousSlugFieldId }: A
         return <SelectDataSource onSelectDataSource={handleSelectDataSource} />
     }
 
-    return <FieldMapping collection={collection} dataSource={dataSource} initialSlugFieldId={previousSlugFieldId} />
+    return <FieldMapping collection={collection} dataSource={dataSource} initialSlugFieldId={previousSlugFieldId} onBack={handleGoBackToDataSourceSelection} />
 }
