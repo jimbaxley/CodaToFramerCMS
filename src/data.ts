@@ -174,8 +174,8 @@ function mapCodaTypeToFramerType(column: CodaColumn): ManagedCollectionFieldInpu
 
 // Helper function to transform Coda values to Framer values
 function transformCodaValue(value: any, field: ManagedCollectionFieldInput, codaColumnType: string, use12HourTime?: boolean): FieldDataEntryInput | null {
-    // 1. Handle null/undefined based on Framer field.type
-    if (value === null || value === undefined) {
+    // 1. Handle null/undefined/empty based on Framer field.type
+    if (value === null || value === undefined || (typeof value === 'string' && value.trim() === '')) {
         switch (field.type) {
             case 'string':
                 return { type: 'string', value: '' };
@@ -184,7 +184,8 @@ function transformCodaValue(value: any, field: ManagedCollectionFieldInput, coda
             case 'boolean':
                 return { type: 'boolean', value: false };
             case 'date':
-                return { type: 'date', value: '' }; 
+                // Use 12/31/1999 as default since Framer requires a valid date
+                return { type: 'date', value: '1999-12-31T00:00:00.000Z' }; 
             case 'image':
                 return { type: 'image', value: '' }; // Value is string URL
             case 'file':
@@ -196,7 +197,7 @@ function transformCodaValue(value: any, field: ManagedCollectionFieldInput, coda
             case 'collectionReference':
                 return { type: 'collectionReference', value: '' }; // Value is single string ID
             default:
-                console.warn(`Unknown field type "${field.type}" for null/undefined value. Defaulting to empty string.`);
+                console.warn(`Unknown field type "${field.type}" for null/undefined/empty value. Defaulting to empty string.`);
                 return { type: 'string', value: '' };
         }
     }
@@ -247,16 +248,23 @@ function transformCodaValue(value: any, field: ManagedCollectionFieldInput, coda
             try {
                 const dateObj = new Date(value);
                 if (isNaN(dateObj.getTime())) {
-                    console.warn(`Invalid date value encountered for field ${field.name}: ${value}. Falling back to empty string.`);
-                    return { type: 'date', value: '' };
+                    console.warn(`Invalid date value encountered for field ${field.name}: ${value}. Using 12/31/1999 as fallback.`);
+                    return { type: 'date', value: '1999-12-31T00:00:00.000Z' };
                 }
-                if (codaColumnType === 'date') { 
-                    const year = dateObj.getUTCFullYear();
-                    const month = (dateObj.getUTCMonth() + 1).toString().padStart(2, '0');
-                    const day = dateObj.getUTCDate().toString().padStart(2, '0');
+
+                // Normalize dates to UTC midnight for date-only values, preserving local date
+                if (codaColumnType === 'date' && value) {
+                    // Extract date parts from the local timezone representation
+                    const year = dateObj.getFullYear();
+                    const month = (dateObj.getMonth() + 1).toString().padStart(2, '0');
+                    const day = dateObj.getDate().toString().padStart(2, '0');
+                    
+                    // Create a new UTC date string at midnight
                     return { type: 'date', value: `${year}-${month}-${day}T00:00:00.000Z` };
                 }
-                return { type: 'date', value: dateObj.toISOString() };
+                
+                // For 'datetime' type, convert to UTC while preserving the exact moment in time
+                return value ? { type: 'date', value: dateObj.toISOString() } : { type: 'date', value: '1999-12-31T00:00:00.000Z' };
             } catch (e: any) {
                 console.warn(`Error parsing date value for field ${field.name}: ${value} (Error: ${e.message}). Falling back to empty string.`);
                 return { type: 'date', value: '' };

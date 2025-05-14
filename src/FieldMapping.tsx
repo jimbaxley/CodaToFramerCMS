@@ -311,7 +311,7 @@ export function FieldMapping({ collection, dataSourceResult, initialSlugFieldId,
                     <button type="button" onClick={onBack} className="back-button">
                         Back
                     </button>
-                    <button disabled={isSyncing} tabIndex={0} className="back-button">
+                    <button type="submit" disabled={isSyncing} tabIndex={0} className="submit-button primary">
                         {isSyncing ? (
                             <div className="framer-spinner" />
                         ) : (

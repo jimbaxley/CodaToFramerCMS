@@ -15,6 +15,67 @@ export function SelectDataSource({ onSelectDataSource }: SelectDataSourceProps) 
     const [selectedTable, setSelectedTable] = useState<CodaTable | null>(null)
     const [isLoading, setIsLoading] = useState(false)
 
+    // Check for existing credentials on mount
+    useEffect(() => {
+        const loadExistingCredentials = async () => {
+            // First check for preloaded data from back navigation
+            const preloadedApiKey = sessionStorage.getItem('preloadedApiKey')
+            const preloadedDocId = sessionStorage.getItem('preloadedDocId')
+            const preloadedDocsJson = sessionStorage.getItem('preloadedDocs')
+            const preloadedTablesJson = sessionStorage.getItem('preloadedTables')
+
+            if (preloadedApiKey && preloadedDocId && preloadedDocsJson && preloadedTablesJson) {
+                // Use the preloaded data
+                const preloadedDocs = JSON.parse(preloadedDocsJson)
+                const preloadedTables = JSON.parse(preloadedTablesJson)
+                
+                setApiKey(preloadedApiKey)
+                setDocs(preloadedDocs)
+                
+                const savedDoc = preloadedDocs.find((doc: CodaDoc) => doc.id === preloadedDocId)
+                if (savedDoc) {
+                    setSelectedDoc(savedDoc)
+                    setTables(preloadedTables)
+                    setStep('select-table')
+                }
+
+                // Clear the preloaded data
+                sessionStorage.removeItem('preloadedApiKey')
+                sessionStorage.removeItem('preloadedDocId')
+                sessionStorage.removeItem('preloadedDocs')
+                sessionStorage.removeItem('preloadedTables')
+                return
+            }
+
+            // Fall back to loading from collection storage if no preloaded data
+            const collection = await framer.getActiveManagedCollection()
+            const savedApiKey = await collection.getPluginData('apiKey')
+            const savedDocId = await collection.getPluginData('docId')
+            
+            if (savedApiKey && savedDocId) {
+                setApiKey(savedApiKey)
+                
+                try {
+                    const docs = await getCodaDocs(savedApiKey)
+                    setDocs(docs)
+                    
+                    const savedDoc = docs.find(doc => doc.id === savedDocId)
+                    if (savedDoc) {
+                        setSelectedDoc(savedDoc)
+                        setStep('select-table')
+                        
+                        const tables = await getCodaTables(savedApiKey, savedDocId)
+                        setTables(tables)
+                    }
+                } catch (error) {
+                    console.error("Error loading saved credentials:", error)
+                }
+            }
+        }
+
+        loadExistingCredentials()
+    }, [])
+
     // Fetch docs when API key is provided
     useEffect(() => {
         if (!apiKey || step !== 'select-doc') return
@@ -113,7 +174,7 @@ export function SelectDataSource({ onSelectDataSource }: SelectDataSourceProps) 
                             <li>Choose your Table as a data source.</li>
                         </ol>
                         <p className="api-docs-link">
-                            Need help?<br></br> Visit the <a href="https://github.com/jimbaxley/CodaToFramerCMS/blob/main/README.md" target="_blank" rel="noopener noreferrer">Github Documentation</a>.
+                            Need help?<br></br> See <a href="https://github.com/jimbaxley/CodaToFramerCMS/blob/main/README.md" target="_blank" rel="noopener noreferrer">plug-in documentation</a>.
                         </p>
                         <input
                             id="coda-api-key-input"

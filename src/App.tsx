@@ -2,7 +2,7 @@ import "./App.css"
 
 import { framer, type ManagedCollection } from "framer-plugin"
 import { useEffect, useLayoutEffect, useState } from "react"
-import { type DataSource, getDataSource, getCodaDataSource, type GetDataSourceResult } from "./data"
+import { type DataSource, getDataSource, getCodaDataSource, type GetDataSourceResult, getCodaDocs, getCodaTables } from "./data"
 import { FieldMapping } from "./FieldMapping"
 import { SelectDataSource } from "./SelectDataSource"
 
@@ -37,12 +37,35 @@ export function App({ collection, previousDataSourceId, previousSlugFieldId }: A
         }
     }
 
-    const handleGoBackToDataSourceSelection = () => {
-        setDataSourceResult(null) // Clear the result
-        // Clear stored Coda credentials when going back
-        collection.setPluginData('apiKey', null)
-        collection.setPluginData('docId', null)
-        collection.setPluginData('tableId', null)
+    const handleGoBackToDataSourceSelection = async () => {
+        // Get current API key and doc ID to maintain them
+        const apiKey = await collection.getPluginData('apiKey')
+        const docId = await collection.getPluginData('docId')
+        if (!apiKey || !docId) {
+            // If we don't have these, something's wrong - start over
+            setDataSourceResult(null)
+            return
+        }
+
+        // Preload the docs and tables before clearing the current view
+        try {
+            const docs = await getCodaDocs(apiKey)
+            const tables = await getCodaTables(apiKey, docId)
+            
+            // Store this data in sessionStorage for the SelectDataSource component to use
+            sessionStorage.setItem('preloadedDocs', JSON.stringify(docs))
+            sessionStorage.setItem('preloadedTables', JSON.stringify(tables))
+            sessionStorage.setItem('preloadedApiKey', apiKey)
+            sessionStorage.setItem('preloadedDocId', docId)
+
+            // Clear only the table selection
+            await collection.setPluginData('tableId', null)
+            setDataSourceResult(null) // This will return us to SelectDataSource
+        } catch (error) {
+            console.error("Error preloading data for back navigation:", error)
+            // If there's an error, just do a clean reset
+            setDataSourceResult(null)
+        }
     }
 
     useLayoutEffect(() => {
@@ -60,7 +83,7 @@ export function App({ collection, previousDataSourceId, previousSlugFieldId }: A
     useEffect(() => {
         if (dataSourceResult?.dataSource && dataSourceResult.showImageUrlWarning && !hasShownImageUrlWarning) {
             framer.notify(
-                "This Coda table has Image columns; skip those to prevent errors.", 
+                "This Coda table has Image columns; use a URL field instead.", 
                 { variant: "warning" }
             );
             setHasShownImageUrlWarning(true);
