@@ -386,9 +386,12 @@ function transformCodaValue(value: unknown, field: ManagedCollectionFieldInput, 
             return { type: 'boolean', value: Boolean(value) };
         case 'date': 
             try {
-                let dateValue: string | number | Date = value;
+                let dateValue: string | number | Date = (typeof value === "string" || typeof value === "number" || value instanceof Date)
+                    ? value
+                    : "";
                 if (typeof value === 'object' && value !== null && 'value' in value) {
-                    dateValue = (value as { value: string | number | Date }).value;
+                    const v = (value as { value: unknown }).value;
+                    dateValue = (typeof v === "string" || typeof v === "number" || v instanceof Date) ? v : "";
                 }
                 const dateObj = new Date(String(dateValue));
                 if (isNaN(dateObj.getTime())) {
@@ -408,38 +411,20 @@ function transformCodaValue(value: unknown, field: ManagedCollectionFieldInput, 
                 // Handle Coda 'datetime' and 'time' types
                 if (codaColumnType === 'datetime' || codaColumnType === 'time') {
                     const isoDate = dateObj.toISOString();
-                    let displayTime: string;
-
-                    // Use local time for display formatting
-                    const localDateObj = new Date(dateObj); // Clone date for local formatting
-                    const hours = localDateObj.getHours();
-                    const minutes = localDateObj.getMinutes();
-                    const seconds = localDateObj.getSeconds();
-
-                    if (use12HourTime) {
-                        const ampm = hours >= 12 ? 'PM' : 'AM';
-                        const formattedHours = hours % 12 || 12;
-                        displayTime = `${formattedHours}:${minutes.toString().padStart(2, '0')}${seconds ? ':' + seconds.toString().padStart(2, '0') : ''} ${ampm}`;
-                    } else {
-                        displayTime = `${hours.toString().padStart(2, '0')}:${minutes.toString().padStart(2, '0')}${seconds ? ':' + seconds.toString().padStart(2, '0') : ''}`;
-                    }
-
                     if (codaColumnType === 'time') {
                         // For time-only, Framer still expects a full ISO string for the 'date' type.
                         // Extract time parts from the original ISO string to maintain UTC time for storage
                         const timePart = isoDate.split('T')[1];
                         return {
                             type: 'date',
-                            value: `1970-01-01T${timePart}`,
-                            displayValue: displayTime
+                            value: `1970-01-01T${timePart}`
                         };
                     }
 
-                    // For 'datetime', store the full ISO string and provide the formatted time string in displayValue.
+                    // For 'datetime', store the full ISO string (no displayValue)
                     return {
                         type: 'date',
-                        value: isoDate,
-                        displayValue: displayTime
+                        value: isoDate
                     };
                 }
 
@@ -959,15 +944,24 @@ export async function syncCollection(
     // Map any enum fields to string fields to avoid type errors
     const compatibleFields = fields.map((field: ManagedCollectionFieldInput) => {
         if (field.type === 'enum') {
+            // Map enum to string, preserve only id, name, and userEditable if present
+            const { id, name, userEditable } = field;
             return {
-                id: field.id,
-                name: field.name,
+                id,
+                name,
                 type: 'string',
-                userEditable: true
-            };
+                userEditable: userEditable ?? true
+            } as ManagedCollectionFieldInput;
         }
-        return field
-    })
+        // For multi-collection reference fields, ensure collectionId is present
+        if (field.type === 'multiCollectionReference') {
+            if (!('collectionId' in field) || typeof (field as { collectionId?: unknown }).collectionId !== 'string') {
+                // Skip invalid multi-collection reference fields
+                return null;
+            }
+        }
+        return field;
+    }).filter((field): field is ManagedCollectionFieldInput => !!field && typeof field.id === 'string' && typeof field.name === 'string' && typeof field.type === 'string');
     await collection.setFields([...compatibleFields])
     await collection.removeItems(Array.from(unsyncedItems))
     await collection.addItems(items)
@@ -993,16 +987,23 @@ export async function syncExistingCollection(
         const dataSourceResult = await getDataSource()
         const existingFields = await collection.getFields()
         // Map any enum fields to string fields to avoid type errors
-        const compatibleFields = existingFields.map((field: ManagedCollectionFieldInput) => {
+        const compatibleFields = existingFields.map((field) => {
             if (field.type === 'enum') {
+                const { id, name, userEditable } = field;
                 return {
-                    id: field.id,
-                    name: field.name,
-                    type: 'string'
+                    id,
+                    name,
+                    type: 'string',
+                    userEditable: userEditable ?? true
+                } as ManagedCollectionFieldInput;
+            }
+            if (field.type === 'multiCollectionReference') {
+                if (!('collectionId' in field) || typeof (field as { collectionId?: unknown }).collectionId !== 'string') {
+                    return null;
                 }
             }
-            return field
-        })
+            return field as ManagedCollectionFieldInput;
+        }).filter((field): field is ManagedCollectionFieldInput => !!field && typeof field.id === 'string' && typeof field.name === 'string' && typeof field.type === 'string');
         const possibleSlugFields = [
             { id: '_id', name: 'Row ID', type: 'string' as const },
             ...dataSourceResult.dataSource.fields.filter((field: ManagedCollectionFieldInput) => field.type === "string")
