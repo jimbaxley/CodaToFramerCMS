@@ -3,11 +3,8 @@ import {
     type FieldDataEntryInput,
     framer,
     type ManagedCollection,
-    type ManagedCollectionItemInput,
-    type EnumCaseData, // Use EnumCaseData instead of EnumCaseDataInput
-    type LocalizedValueUpdate // Added import for LocalizedValueUpdate
+    type ManagedCollectionItemInput
 } from "framer-plugin"
-import { type CodaColumn, type CodaDoc, type CodaTable, type DataSource, type GetDataSourceResult, type EnumCase, type DateFieldDataEntryInput } from "./types" // Corrected import path and ensured DateFieldDataEntryInput is imported
 import { marked } from "marked";
 import DOMPurify from "dompurify";
 
@@ -97,8 +94,8 @@ function extractMeaningfulText(item: any): string {
             (typeof obj.value === 'string' && obj.value) ||
             (typeof obj.displayValue === 'string' && obj.displayValue) ||
             (typeof obj.name === 'string' && obj.name) ||
-            (typeof obj.content === 'string' && obj.content) || // For rich text / canvas like objects
-            String(item) // Fallback: full stringification (might give [object Object])
+            (typeof obj.content === 'string' && obj.content) // For rich text / canvas like objects
+            || String(item) // Fallback: full stringification (might give [object Object])
         );
     }
     return String(item); // For primitives or if not an object
@@ -139,24 +136,12 @@ function mapCodaTypeToFramerType(column: CodaColumn, _sampleValues: unknown[]): 
             type: 'image',
         };
     }
-    // Enum mapping: if select/scale and has options.choices, map to Framer enum
+    // Enum mapping: if select/scale and has options.choices, map to string (remove enum support)
     if ((baseType === 'select' || baseType === 'scale') && column.format.options && Array.isArray(column.format.options.choices)) {
-        const cases: EnumCaseData[] = column.format.options.choices.map((choice: { name: string; id?: string }, idx: number) => ({
-            id: choice.id || `case-${idx}`,
-            name: choice.name,
-            nameByLocale: {
-                en: {
-                    action: 'set' as const,
-                    value: choice.name,
-                    needsReview: false
-                }
-            }
-        }));
         return {
             id: column.id,
             name: column.name,
-            type: 'enum',
-            cases
+            type: 'string'
         };
     }
     switch (baseType) {
@@ -270,7 +255,7 @@ function markdownToSanitizedHtml(md: string): string {
     });
 }
 
-function transformCodaValue(value: any, field: ManagedCollectionFieldInput, codaColumnType: string, use12HourTime?: boolean): FieldDataEntryInput | DateFieldDataEntryInput | null {
+function transformCodaValue(value: any, field: ManagedCollectionFieldInput, codaColumnType: string, use12HourTime?: boolean): FieldDataEntryInput | null {
     // 1. Handle null/undefined/empty based on Framer field.type
     if (value === null || value === undefined || (typeof value === 'string' && value.trim() === '')) {
         switch (field.type) {
@@ -399,7 +384,7 @@ function transformCodaValue(value: any, field: ManagedCollectionFieldInput, coda
                             ,
                             value: `1970-01-01T${timePart}`, // Store as full ISO but with a fixed date
                             displayValue: displayTime
-                        } as DateFieldDataEntryInput;
+                        } as FieldDataEntryInput;
                     }
 
                     // For 'datetime', store the full ISO string and provide the formatted time string in displayValue.
@@ -407,7 +392,7 @@ function transformCodaValue(value: any, field: ManagedCollectionFieldInput, coda
                         type: 'date', // Framer's field type
                         value: isoDate, // Store full ISO string
                         displayValue: displayTime
-                    } as DateFieldDataEntryInput;
+                    } as FieldDataEntryInput;
                 }
 
                 // Default for other date-like values (should ideally be covered by 'date' or 'datetime')
@@ -856,7 +841,7 @@ export function mergeFieldsWithExistingFields(
 export async function syncCollection(
     collection: ManagedCollection,
     dataSourceResult: GetDataSourceResult,
-    fields: readonly ManagedCollectionFieldInput[],
+    fields: ManagedCollectionFieldInput[],
     slugField: ManagedCollectionFieldInput
 ) {
     const { dataSource } = dataSourceResult;
@@ -913,28 +898,18 @@ export async function syncCollection(
         })
     }
 
-    // Transform the fields to ensure proper typing for enum cases
-    const transformedFields = fields.map(field => {
-        if (field.type === "enum" && "cases" in field) {
+    // Map any enum fields to string fields to avoid type errors
+    const compatibleFields = fields.map((field: any) => {
+        if (field.type === 'enum') {
             return {
-                ...field,
-                cases: (field.cases || []).map((caseData: EnumCaseData, idx) => ({
-                    id: caseData.id || `case-${idx}`,
-                    name: caseData.name,
-                    nameByLocale: {
-                        en: {
-                            action: "set" as const,
-                            value: caseData.name,
-                            needsReview: false
-                        }
-                    }
-                }))
+                id: field.id,
+                name: field.name,
+                type: 'string'
             }
         }
         return field
     })
-
-    await collection.setFields(transformedFields)
+    await collection.setFields([...compatibleFields])
     await collection.removeItems(Array.from(unsyncedItems))
     await collection.addItems(items)
 
@@ -956,121 +931,33 @@ export async function syncExistingCollection(
     }
 
     try {
-        const dataSourceResult = await getDataSource() // Will now return GetDataSourceResult
+        const dataSourceResult = await getDataSource()
         const existingFields = await collection.getFields()
-
-        // Create a list of possible slug fields including the special _id field
+        // Map any enum fields to string fields to avoid type errors
+        const compatibleFields = existingFields.map((field: any) => {
+            if (field.type === 'enum') {
+                return {
+                    id: field.id,
+                    name: field.name,
+                    type: 'string'
+                }
+            }
+            return field
+        })
         const possibleSlugFields = [
             { id: '_id', name: 'Row ID', type: 'string' as const },
-            ...dataSourceResult.dataSource.fields.filter((field: ManagedCollectionFieldInput) => field.type === "string") // Added explicit type for field
+            ...dataSourceResult.dataSource.fields.filter((field: ManagedCollectionFieldInput) => field.type === "string")
         ]
-        
         const slugField = possibleSlugFields.find(field => field.id === previousSlugFieldId)
         if (!slugField) {
             console.error(`No field matches the slug field id "${previousSlugFieldId}". Sync will not be performed.`)
             return { didSync: false }
         }
-
-        // Transform existing fields to ensure proper typing
-        const transformedFields = existingFields.map(field => {
-            if (field.type === "enum" && field.cases) {
-                return {
-                    ...field,
-                    cases: field.cases.map((c: EnumCase, idx: number) => ({
-                        id: c.id || `case-${idx}`,
-                        name: c.name,
-                        nameByLocale: Object.fromEntries(
-                            Object.entries(c.nameByLocale || {}).map(([locale, value]) => [
-                                locale,
-                                {
-                                    action: "set" as const,
-                                    value: typeof value === 'string' ? value : String(value),
-                                    needsReview: false
-                                } satisfies LocalizedValueUpdate
-                            ])
-                        )
-                    }))
-                }; // Added missing closing brace
-            }
-            return field;
-        }) as ManagedCollectionFieldInput[];
-
-        await syncCollection(collection, dataSourceResult, transformedFields, slugField) // Pass dataSourceResult
+        await syncCollection(collection, dataSourceResult, [...compatibleFields], slugField)
         return { didSync: true }
     } catch (error) {
         console.error(error)
         console.error(`Failed to sync collection "${previousDataSourceId}". Check browser console for more details.`)
         return { didSync: false }
     }
-}
-
-export interface CodaDoc {
-    id: string;
-    name: string;
-    type: string;
-}
-
-export interface CodaTable {
-    id: string;
-    name: string;
-    type: string;
-}
-
-export async function getCodaDocs(
-    apiKey: string,
-    signal?: AbortSignal
-): Promise<CodaDoc[]> {
-    const docsUrl = `https://coda.io/apis/v1/docs`
-    const headers = {
-        'Authorization': `Bearer ${apiKey}`,
-        'Content-Type': 'application/json'
-    }
-    
-    const docsResponse = await fetch(docsUrl, {
-        ...(signal ? { signal } : {}),
-        headers,
-    })
-
-    if (!docsResponse.ok) {
-        const errorText = await docsResponse.text()
-        throw new Error(`Failed to fetch docs from Coda: ${docsResponse.status} ${errorText}`)
-    }
-
-    const docsData = await docsResponse.json()
-    return docsData.items
-        .filter((doc: any) => doc.type === 'doc')
-        .map((doc: any) => ({
-            id: doc.id,
-            name: doc.name,
-            type: doc.type
-        }))
-}
-
-export async function getCodaTables(
-    apiKey: string,
-    docId: string,
-    signal?: AbortSignal
-): Promise<CodaTable[]> {
-    const tablesUrl = `https://coda.io/apis/v1/docs/${docId}/tables`
-    const headers = {
-        'Authorization': `Bearer ${apiKey}`,
-        'Content-Type': 'application/json'
-    }
-    
-    const tablesResponse = await fetch(tablesUrl, {
-        ...(signal ? { signal } : {}),
-        headers,
-    })
-
-    if (!tablesResponse.ok) {
-        const errorText = await tablesResponse.text()
-        throw new Error(`Failed to fetch tables from Coda: ${tablesResponse.status} ${errorText}`)
-    }
-
-    const tablesData = await tablesResponse.json()
-    return tablesData.items.map((table: any) => ({
-        id: table.id,
-        name: table.name,
-        type: table.type
-    }))
 }
