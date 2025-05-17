@@ -21,6 +21,31 @@ interface ValueWrapper {
     content?: unknown;
 }
 
+interface CodaApiResponse<T> {
+    items: T[];
+    href: string;
+    syncToken?: string;
+}
+
+interface CodaRow {
+    id: string;
+    createdAt: string;
+    updatedAt: string;
+    values: Record<string, unknown>;
+}
+
+interface MonetaryAmount {
+    '@type': 'MonetaryAmount';
+    amount: number;
+}
+
+interface ImageObject {
+    '@type': 'ImageObject';
+    url?: string;
+    contentUrl?: string;
+    thumbnailUrl?: string;
+}
+
 export const PLUGIN_KEYS = {
     DATA_SOURCE_ID: "dataSourceId",
     SLUG_FIELD_ID: "slugFieldId",
@@ -262,7 +287,8 @@ const ALLOWED_TAGS = [
 
 function markdownToSanitizedHtml(md: string): string {
     // Use marked.parseSync if available, otherwise fallback to marked (sync)
-    const rawHtml = (marked as any).parseSync ? (marked as any).parseSync(md) : marked(md);
+    const parser = marked as unknown as { parseSync?: (text: string) => string };
+    const rawHtml = parser.parseSync ? parser.parseSync(md) : marked(md);
     // DOMPurify only allows a subset of config, so we use ALLOWED_TAGS and basic attributes
     return DOMPurify.sanitize(rawHtml, {
         ALLOWED_TAGS,
@@ -274,7 +300,7 @@ function markdownToSanitizedHtml(md: string): string {
     });
 }
 
-function transformCodaValue(value: any, field: ManagedCollectionFieldInput, codaColumnType: string, use12HourTime?: boolean): FieldDataEntryInput | null {
+function transformCodaValue(value: unknown, field: ManagedCollectionFieldInput, codaColumnType: string, use12HourTime?: boolean): FieldDataEntryInput | null {
     // 1. Handle null/undefined/empty based on Framer field.type
     if (value === null || value === undefined || (typeof value === 'string' && value.trim() === '')) {
         switch (field.type) {
@@ -304,7 +330,7 @@ function transformCodaValue(value: any, field: ManagedCollectionFieldInput, coda
 
     // 2. Main switch on field.type (Framer type)
     switch (field.type) {
-        case 'number':
+        case 'number': {
             let numericValue: number;
             if (typeof value === 'number') {
                 numericValue = value;
@@ -336,8 +362,9 @@ function transformCodaValue(value: any, field: ManagedCollectionFieldInput, coda
                 }
             } else if (typeof value === 'object' && value !== null) {
                 // Handle schema.org MonetaryAmount format
-                if (value['@type'] === 'MonetaryAmount' && typeof value.amount === 'number') {
-                    numericValue = value.amount;
+                const monetaryAmount = value as MonetaryAmount;
+                if (monetaryAmount['@type'] === 'MonetaryAmount' && typeof monetaryAmount.amount === 'number') {
+                    numericValue = monetaryAmount.amount;
                 }
                 // Handle simple value wrapper object
                 else if ('value' in value && typeof value.value === 'number') {
@@ -355,13 +382,18 @@ function transformCodaValue(value: any, field: ManagedCollectionFieldInput, coda
                 numericValue = 0;
             }
             return { type: 'number', value: numericValue };
+        }
         case 'boolean':
             return { type: 'boolean', value: Boolean(value) };
         case 'date': 
             try {
-                const dateObj = new Date(value);
+                let dateValue = value;
+                if (typeof value === 'object' && value !== null && 'value' in value) {
+                    dateValue = (value as { value: unknown }).value;
+                }
+                const dateObj = new Date(String(dateValue));
                 if (isNaN(dateObj.getTime())) {
-                    console.warn(`Invalid date value encountered for field ${field.name}: ${value}. Leaving blank.`);
+                    console.warn(`Invalid date value encountered for field ${field.name}: ${String(dateValue)}. Leaving blank.`);
                     return null; // Leave date blank if invalid
                 }
 
@@ -418,8 +450,9 @@ function transformCodaValue(value: any, field: ManagedCollectionFieldInput, coda
                 // If it's not 'date', 'datetime', or 'time', but Framer type is 'date', store as full ISO.
                 return { type: 'date', value: dateObj.toISOString() };
 
-            } catch (e: any) {
-                console.warn(`Error parsing date value for field ${field.name}: ${value} (Error: ${e.message}). Leaving blank.`);
+            } catch (error) {
+                const errorMessage = error instanceof Error ? error.message : 'Unknown error';
+                console.warn(`Error parsing date value for field ${field.name}: ${value} (Error: ${errorMessage}). Leaving blank.`);
                 return null; // Leave date blank on error
             }
         case 'formattedText': 
@@ -493,8 +526,9 @@ function transformCodaValue(value: any, field: ManagedCollectionFieldInput, coda
                     } else {
                         // Fall through to generic string processing if specific time parsing fails
                     }
-                } catch (e: any) {
+                } catch (error) {
                     // Swallow error, fall through to generic string processing
+                    const _unused = error; // Acknowledge error without using it
                 }
             }
 
@@ -505,8 +539,9 @@ function transformCodaValue(value: any, field: ManagedCollectionFieldInput, coda
             //     console.log(`[Text Processing] Field "${field.name}" metadata:`, ...)
             // }
 
-            if (Array.isArray(value) || (value && typeof value === 'object' && Array.isArray((value as any).rawValue))) {
-                const arr = Array.isArray(value) ? value : (value as any).rawValue;
+            interface RawValueContainer { rawValue: unknown[] }
+            if (Array.isArray(value) || (value && typeof value === 'object' && 'rawValue' in value && Array.isArray((value as RawValueContainer).rawValue))) {
+                const arr = Array.isArray(value) ? value : (value as RawValueContainer).rawValue;
                 textValue = arr
                     .map(extractMeaningfulText)
                     .filter(Boolean)
@@ -542,12 +577,20 @@ function transformCodaValue(value: any, field: ManagedCollectionFieldInput, coda
                     }
                 }
                 // Handle single ImageObject
-                else if (value['@type'] === 'ImageObject') {
-                    const urls = [value.url, value.contentUrl, value.thumbnailUrl].filter(u => typeof u === 'string');
-                    for (const url of urls) {
-                        if (isValidAssetUrl(url) || isLikelyImageUrl(url)) {
-                            imageUrl = url;
-                            break;
+                else {
+                    const obj = value as ImageObject;
+                    if (obj['@type'] === 'ImageObject') {
+                        const possibleUrls = [
+                            typeof obj.url === 'string' ? obj.url : null,
+                            typeof obj.contentUrl === 'string' ? obj.contentUrl : null,
+                            typeof obj.thumbnailUrl === 'string' ? obj.thumbnailUrl : null
+                        ].filter((url): url is string => url !== null);
+                        
+                        for (const url of possibleUrls) {
+                            if (isValidAssetUrl(url) || isLikelyImageUrl(url)) {
+                                imageUrl = url;
+                                break;
+                            }
                         }
                     }
                 }
@@ -634,11 +677,12 @@ function transformCodaValue(value: any, field: ManagedCollectionFieldInput, coda
         
         case 'collectionReference': { 
             let finalItemId = '';
-            const processItem = (item: any): string | null => {
+            const processItem = (item: unknown): string | null => {
                 if (typeof item === 'string') return item;
                 if (typeof item === 'object' && item !== null) {
-                    if ('id'in item && typeof item.id === 'string') return item.id;
-                    if ('@id'in item && typeof item['@id'] === 'string') return item['@id'];
+                    const obj = item as Record<string, unknown>;
+                    if ('id' in obj && typeof obj.id === 'string') return obj.id;
+                    if ('@id' in obj && typeof obj['@id'] === 'string') return obj['@id'];
                 }
                 return null;
             };
@@ -672,7 +716,7 @@ function stripMarkdown(text: string): string {
     // Example: [user@example.com](user@example.com) -> user@example.com
     // Example: [Click here](http://example.com) -> Click here
     // Example: [Click here](mailto:user@example.com) -> Click here
-    newText = newText.replace(/\[([^\]]+)\]\(([^\)]+)\)/g, (_match, linkText, linkUrl) => {
+    newText = newText.replace(/\[([^\]]+)]\(([^)]+)\)/g, (_match, linkText, linkUrl) => {
         if (linkUrl.startsWith('mailto:')) {
             const emailFromUrl = linkUrl.substring(7);
             if (linkText.toLowerCase() === emailFromUrl.toLowerCase()) {
@@ -743,14 +787,14 @@ export async function getCodaDataSource(
         throw new Error(`Failed to fetch data from Coda: ${columnsResponse.status}`)
     }
 
-    const columnsData = await columnsResponse.json()
+    const columnsData = await columnsResponse.json() as CodaApiResponse<CodaColumn>;
 
     const columns = columnsData.items
-        .map((col: any) => ({
+        .map((col) => ({
             id: col.id,
             name: String(col.name || col.id),
             format: col.format
-        })) as CodaColumn[];
+        }));
 
     // Fetch rows with rich text formatting
     const rowsUrl = `https://coda.io/apis/v1/docs/${docId}/tables/${tableId}/rows?useRichText=true&valueFormat=rich`
@@ -764,12 +808,12 @@ export async function getCodaDataSource(
         throw new Error(`Failed to fetch data from Coda: ${rowsResponse.status} ${errorText}`)
     }
 
-    const rowsData = await rowsResponse.json()
+    const rowsData = await rowsResponse.json() as CodaApiResponse<CodaRow>;
 
     // Remove debug logging for raw API response
     // console.log('Raw Coda API response:', {
     //     // firstRow: rowsData.items[0], // Removed unused variable
-    //     rowStructure: Object.keys(rowsData.items[0] || {})
+    //     rowStructure: Object.keys(rowsData.items[0]?.values || {})
     // });
 
     // const firstRow = rowsData.items[0]?.values || {}; // Removed unused variable
@@ -918,7 +962,7 @@ export async function syncCollection(
     }
 
     // Map any enum fields to string fields to avoid type errors
-    const compatibleFields = fields.map((field: any) => {
+    const compatibleFields = fields.map((field: ManagedCollectionFieldInput) => {
         if (field.type === 'enum') {
             return {
                 id: field.id,
@@ -953,7 +997,7 @@ export async function syncExistingCollection(
         const dataSourceResult = await getDataSource()
         const existingFields = await collection.getFields()
         // Map any enum fields to string fields to avoid type errors
-        const compatibleFields = existingFields.map((field: any) => {
+        const compatibleFields = existingFields.map((field: ManagedCollectionFieldInput) => {
             if (field.type === 'enum') {
                 return {
                     id: field.id,
