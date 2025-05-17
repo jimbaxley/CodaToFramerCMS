@@ -78,19 +78,49 @@ interface CodaColumn {
     };
 }
 
-// Helper: check if a string is a likely image URL (common extensions)
+/**
+ * Extracts meaningful text from a Coda value, handling schema.org objects and common wrappers.
+ * @param item - The value to extract text from.
+ * @returns A string representation suitable for Framer.
+ */
+function extractMeaningfulText(item: any): string {
+    if (typeof item === 'string') return item;
+    if (item && typeof item === 'object' && !Array.isArray(item)) {
+        const obj = item as Record<string, unknown>;
+        // Specifically handle schema.org WebPage objects for URLs (e.g., email addresses)
+        if (obj['@type'] === 'WebPage' && typeof obj.url === 'string') {
+            return obj.url;
+        }
+        // General object property extraction logic
+        return (
+            (typeof obj.rawValue === 'string' && obj.rawValue) || 
+            (typeof obj.value === 'string' && obj.value) ||
+            (typeof obj.displayValue === 'string' && obj.displayValue) ||
+            (typeof obj.name === 'string' && obj.name) ||
+            (typeof obj.content === 'string' && obj.content) || // For rich text / canvas like objects
+            String(item) // Fallback: full stringification (might give [object Object])
+        );
+    }
+    return String(item); // For primitives or if not an object
+}
+
+/**
+ * Helper: check if a string is a likely image URL (common extensions)
+ */
 function isLikelyImageUrl(url: string): boolean {
     if (typeof url !== 'string') return false;
     const trimmed = url.trim();
     // Accepts .jpg, .jpeg, .png, .gif, .webp, .svg, .bmp, .tiff, .ico, .apng, .avif
     // OR any codahosted.io URL (with or without extension)
     return (
-        /^https?:\/\/[^\s]+\.(jpe?g|png|gif|webp|svg|bmp|tiff?|ico|apng|avif)(\?.*)?$/i.test(trimmed) ||
+        /^https?:\/\/[\S]+\.(jpe?g|png|gif|webp|svg|bmp|tiff?|ico|apng|avif)(\?.*)?$/i.test(trimmed) ||
         /^https?:\/\/codahosted\.io\//.test(trimmed)
     );
 }
 
-// Helper function to map Coda types to Framer types
+/**
+ * Helper function to map Coda types to Framer types
+ */
 function mapCodaTypeToFramerType(column: CodaColumn, _sampleValues: unknown[]): ManagedCollectionFieldInput {
     const baseType = column.format.type.toLowerCase();
     const name = column.name.toLowerCase();
@@ -109,7 +139,6 @@ function mapCodaTypeToFramerType(column: CodaColumn, _sampleValues: unknown[]): 
             type: 'image',
         };
     }
-
     // Enum mapping: if select/scale and has options.choices, map to Framer enum
     if ((baseType === 'select' || baseType === 'scale') && column.format.options && Array.isArray(column.format.options.choices)) {
         const cases: EnumCaseData[] = column.format.options.choices.map((choice: { name: string; id?: string }, idx: number) => ({
@@ -130,7 +159,6 @@ function mapCodaTypeToFramerType(column: CodaColumn, _sampleValues: unknown[]): 
             cases
         };
     }
-
     switch (baseType) {
         case 'text':
         case 'email':
@@ -188,11 +216,7 @@ function mapCodaTypeToFramerType(column: CodaColumn, _sampleValues: unknown[]): 
             }
         case 'canvas':
         case 'richtext':
-            // Log the column format to understand what metadata is available
-            console.log(`Mapping ${baseType} field:`, {
-                column,
-                format: column.format
-            });
+            // Removed debug log for mapping richtext/canvas fields
             return {
                 id: column.id,
                 name: column.name,
@@ -214,7 +238,8 @@ function mapCodaTypeToFramerType(column: CodaColumn, _sampleValues: unknown[]): 
                 type: 'link'
             }
         default:
-            console.warn(`Unsupported Coda type "${baseType}", falling back to string`)
+            // Only warn for truly unsupported types
+            // console.warn(`Unsupported Coda type "${baseType}", falling back to string`)
             return {
                 id: column.id,
                 name: column.name,
@@ -245,7 +270,7 @@ function markdownToSanitizedHtml(md: string): string {
     });
 }
 
-function transformCodaValue(value: any, field: ManagedCollectionFieldInput, codaColumnType: string, use12HourTime?: boolean): FieldDataEntryInput | DateFieldDataEntryInput | null { // Modified return type
+function transformCodaValue(value: any, field: ManagedCollectionFieldInput, codaColumnType: string, use12HourTime?: boolean): FieldDataEntryInput | DateFieldDataEntryInput | null {
     // 1. Handle null/undefined/empty based on Framer field.type
     if (value === null || value === undefined || (typeof value === 'string' && value.trim() === '')) {
         switch (field.type) {
@@ -463,56 +488,26 @@ function transformCodaValue(value: any, field: ManagedCollectionFieldInput, coda
                         return { type: 'string', value: formattedTime };
                     } else {
                         // Fall through to generic string processing if specific time parsing fails
-                        console.warn(`Invalid or unparseable time value for Coda 'time' field ${field.name}: ${JSON.stringify(value)}. Falling back to generic string processing.`);
                     }
                 } catch (e: any) {
-                    // Fall through to generic string processing on error
-                    console.warn(`Error processing Coda 'time' field ${field.name} (value: ${JSON.stringify(value)}): ${e.message}. Falling back to generic string processing.`);
+                    // Swallow error, fall through to generic string processing
                 }
             }
 
             // General string processing (also serves as fallback for 'time' if parsing/formatting fails)
             let textValue = '';
-            // For debugging text fields only
-            if (codaColumnType === 'text') {
-                console.log(`[Text Processing] Field "${field.name}" metadata:`, {
-                    valueType: typeof value,
-                    isArray: Array.isArray(value),
-                    valuePreview: typeof value === 'string' ? value.substring(0,100) : JSON.stringify(value).substring(0,100),
-                    hasRawValue: value && typeof value === 'object' && 'rawValue' in value,
-                    hasValue: value && typeof value === 'object' && 'value' in value,
-                });
-            }
-
-            const extractMeaningfulText = (item: any): string => {
-                if (typeof item === 'string') return item;
-                if (item && typeof item === 'object' && !Array.isArray(item)) {
-                    const obj = item as Record<string, unknown>;
-                    // Specifically handle schema.org WebPage objects for URLs (e.g., email addresses)
-                    if (obj['@type'] === 'WebPage' && typeof obj.url === 'string') {
-                        return obj.url;
-                    }
-                    // General object property extraction logic
-                    return (
-                        (typeof obj.rawValue === 'string' && obj.rawValue) || 
-                        (typeof obj.value === 'string' && obj.value) ||
-                        (typeof obj.displayValue === 'string' && obj.displayValue) ||
-                        (typeof obj.name === 'string' && obj.name) ||
-                        (typeof obj.content === 'string' && obj.content) || // For rich text / canvas like objects
-                        String(item) // Fallback: full stringification (might give [object Object])
-                    );
-                }
-                return String(item); // For primitives or if not an object
-            };
+            // For debugging text fields only (removed log)
+            // if (codaColumnType === 'text') {
+            //     console.log(`[Text Processing] Field "${field.name}" metadata:`, ...)
+            // }
 
             if (Array.isArray(value) || (value && typeof value === 'object' && Array.isArray((value as any).rawValue))) {
                 const arr = Array.isArray(value) ? value : (value as any).rawValue;
                 textValue = arr
                     .map(extractMeaningfulText)
-                    .filter(Boolean) // Filter out empty strings that might result from String(null) or String(undefined)
+                    .filter(Boolean)
                     .join(', ');
-            }
-            else {
+            } else {
                 textValue = extractMeaningfulText(value);
             }
 
@@ -587,13 +582,17 @@ function transformCodaValue(value: any, field: ManagedCollectionFieldInput, coda
                 return { type: 'image', value: imageUrl.trim() };
             }
 
-            // Log warning for invalid/missing URLs
-            console.warn(`Invalid or missing image URL for field ${field.name}:`, { 
-                rawValue: value,
-                processedUrl: imageUrl || '(none)',
-                validUrl: Boolean(imageUrl && isValidAssetUrl(imageUrl)),
-                likelyImage: Boolean(imageUrl && isLikelyImageUrl(imageUrl))
-            });
+            // Log warning for invalid/missing URLs (keep, as this is user-actionable)
+            if (!(imageUrl && (isValidAssetUrl(imageUrl) || isLikelyImageUrl(imageUrl)))) {
+                // Only warn if the user mapped a field as image but no valid URL was found
+                // (Keep this warning)
+                console.warn(`Invalid or missing image URL for field ${field.name}:`, { 
+                    rawValue: value,
+                    processedUrl: imageUrl || '(none)',
+                    validUrl: Boolean(imageUrl && isValidAssetUrl(imageUrl)),
+                    likelyImage: Boolean(imageUrl && isLikelyImageUrl(imageUrl))
+                });
+            }
             return null;
         }
         case 'file': {
@@ -610,6 +609,7 @@ function transformCodaValue(value: any, field: ManagedCollectionFieldInput, coda
             if (fileUrl && isValidAssetUrl(fileUrl)) {
                 return { type: 'file', value: fileUrl.trim() }; 
             }
+            // Only warn if the user mapped a field as file but no valid URL was found
             console.warn(`Unsupported or non-absolute file value for field ${field.name}: '${fileUrl}'. Skipping asset.`, { value });
             return null;
         }
@@ -623,6 +623,7 @@ function transformCodaValue(value: any, field: ManagedCollectionFieldInput, coda
             if (linkUrl) {
                 return { type: 'link', value: linkUrl }; 
             }
+            // Only warn if the user mapped a field as link but no valid URL was found
             console.warn(`Unsupported link value for field ${field.name}: ${JSON.stringify(value)}. Falling back to empty link URL.`);
             return { type: 'link', value: '' };
         }
@@ -648,6 +649,7 @@ function transformCodaValue(value: any, field: ManagedCollectionFieldInput, coda
         }
 
         default:
+            // Only warn for truly unhandled types
             console.warn(
                 `Unhandled Framer field type "${field.type}" in transformCodaValue ` +
                 `for Coda column type "${codaColumnType}" and value: ${JSON.stringify(value)}. ` +
@@ -760,11 +762,11 @@ export async function getCodaDataSource(
 
     const rowsData = await rowsResponse.json()
 
-    // Add debug logging to see raw data structure
-    console.log('Raw Coda API response:', {
-        // firstRow: rowsData.items[0], // Removed unused variable
-        rowStructure: Object.keys(rowsData.items[0] || {})
-    });
+    // Remove debug logging for raw API response
+    // console.log('Raw Coda API response:', {
+    //     // firstRow: rowsData.items[0], // Removed unused variable
+    //     rowStructure: Object.keys(rowsData.items[0] || {})
+    // });
 
     // const firstRow = rowsData.items[0]?.values || {}; // Removed unused variable
 
