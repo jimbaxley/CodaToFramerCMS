@@ -1,28 +1,33 @@
 import { type ManagedCollectionFieldInput, framer, type ManagedCollection } from "framer-plugin"
 import { useEffect, useState } from "react"
 import { type GetDataSourceResult, mergeFieldsWithExistingFields, syncCollection } from "./data"
-import { type EnumCase } from "./types"
 
 interface FieldMappingRowProps {
     field: ManagedCollectionFieldInput
     originalFieldName: string | undefined
-    disabled: boolean
+    isIgnored: boolean // Changed from 'disabled'
     onToggleDisabled: (fieldId: string) => void
     onNameChange: (fieldId: string, name: string) => void
 }
 
-function FieldMappingRow({ field, originalFieldName, disabled, onToggleDisabled, onNameChange }: FieldMappingRowProps) {
+function FieldMappingRow({ field, originalFieldName, isIgnored, onToggleDisabled, onNameChange }: FieldMappingRowProps) {
     return (
         <>
             <button
                 type="button"
                 className="source-field"
-                aria-disabled={disabled}
+                aria-disabled={isIgnored || undefined}
                 onClick={() => onToggleDisabled(field.id)}
                 tabIndex={0}
+                data-field-type={field.type}
             >
-                <input type="checkbox" checked={!disabled} tabIndex={-1} readOnly />
-                <span>{originalFieldName ?? field.id} ({field.id})</span>
+                <input 
+                    type="checkbox" 
+                    checked={!isIgnored} 
+                    tabIndex={-1} 
+                    readOnly 
+                />
+                <span>{originalFieldName ?? field.id}</span>
             </button>
             <svg xmlns="http://www.w3.org/2000/svg" width="8" height="8" fill="none">
                 <path
@@ -36,8 +41,11 @@ function FieldMappingRow({ field, originalFieldName, disabled, onToggleDisabled,
             </svg>
             <input
                 type="text"
-                style={{ width: "100%", opacity: disabled ? 0.5 : 1 }}
-                disabled={disabled}
+                style={{ 
+                    width: "100%", 
+                    opacity: isIgnored ? 0.5 : 1 
+                }}
+                disabled={isIgnored}
                 placeholder={field.id}
                 value={field.name}
                 onChange={event => onNameChange(field.id, event.target.value)}
@@ -70,22 +78,23 @@ export function FieldMapping({ collection, dataSourceResult, initialSlugFieldId,
     const isSyncing = status === "syncing-collection"
     const isLoadingFields = status === "loading-fields"
 
+    // Find the best default slug field: prefer 'name', then first string field, then Row ID
+    const stringFields = dataSource.fields.filter(field => field.type === "string")
+    const nameField = stringFields.find(field => field.name.toLowerCase() === "name")
+    const defaultSlugField = nameField || stringFields[0] || { id: '_id', name: 'Row ID', type: 'string' as const }
+
     const [possibleSlugFields] = useState(() => [
-        // Add row ID as the first (default) option
         { id: '_id', name: 'Row ID', type: 'string' as const },
-        ...dataSource.fields.filter(field => field.type === "string")
+        ...stringFields
     ] as ManagedCollectionFieldInput[])
 
     const [selectedSlugField, setSelectedSlugField] = useState<ManagedCollectionFieldInput | null>(
-        possibleSlugFields.find(field => field.id === initialSlugFieldId) ?? possibleSlugFields[0] ?? null
+        possibleSlugFields.find(field => field.id === initialSlugFieldId) ?? defaultSlugField
     )
 
     const [fields, setFields] = useState(initialManagedCollectionFields)
     const [ignoredFieldIds, setIgnoredFieldIds] = useState(initialFieldIds)
     const [use12HourTimeFormat, setUse12HourTimeFormat] = useState(false) // New state for time format
-
-    // Use the dataSource id directly since it\'s the table name from Coda
-    const dataSourceName = dataSource.id // Uses destructured dataSource
 
     useEffect(() => {
         const abortController = new AbortController()
@@ -102,31 +111,36 @@ export function FieldMapping({ collection, dataSourceResult, initialSlugFieldId,
             .then(collectionFields => {
                 if (abortController.signal.aborted) return
 
-                setFields(
-                    mergeFieldsWithExistingFields(
-                        dataSource.fields, // Uses destructured dataSource
-                        collectionFields.map(field => {
-                            if (field.type === "enum" && field.cases) {
-                                return {
-                                    ...field,
-                                    cases: field.cases.map(c => ({
-                                        ...c,
-                                        nameByLocale: c.nameByLocale ?? {}
-                                    }))
-                                }
+                const mergedSourceFields = mergeFieldsWithExistingFields(
+                    dataSource.fields,
+                    collectionFields.map(field => {
+                        if (field.type === "enum" && field.cases) {
+                            return {
+                                ...field,
+                                cases: field.cases.map(c => ({
+                                    ...c,
+                                    nameByLocale: c.nameByLocale ?? {}
+                                }))
                             }
-                            return field
-                        })
-                    )
-                )
+                        }
+                        return field
+                    })
+                );
+                setFields(mergedSourceFields);
 
                 const existingFieldIds = new Set(collectionFields.map(field => field.id))
-                const ignoredFields = dataSource.fields.filter(sourceField => !existingFieldIds.has(sourceField.id)) // Uses destructured dataSource
-
-                if (initialSlugFieldId) {
-                    setIgnoredFieldIds(new Set(ignoredFields.map(field => field.id)))
-                }
-
+                const initialIgnored = new Set<string>()
+                
+                mergedSourceFields.forEach(sourceField => {
+                    // Removed: sourceField.type === "image" check for auto-ignoring
+                    // Image fields now follow the same logic as other fields:
+                    // Ignore if it's a new field and we're editing (initialSlugFieldId exists)
+                    const isExistingField = existingFieldIds.has(sourceField.id);
+                    if (!isExistingField && initialSlugFieldId) {
+                        initialIgnored.add(sourceField.id);
+                    }
+                });
+                setIgnoredFieldIds(initialIgnored);
                 setStatus("mapping-fields")
             })
             .catch(error => {
@@ -152,6 +166,11 @@ export function FieldMapping({ collection, dataSourceResult, initialSlugFieldId,
     }
 
     const toggleFieldDisabledState = (fieldId: string) => {
+        // const field = fields.find(f => f.id === fieldId); // No longer needed
+        // if (field && field.type === "image") { // Removed: Allow toggling for all field types
+        //     return; 
+        // }
+
         setIgnoredFieldIds(previousIgnoredFieldIds => {
             const updatedIgnoredFieldIds = new Set(previousIgnoredFieldIds)
 
@@ -186,7 +205,7 @@ export function FieldMapping({ collection, dataSourceResult, initialSlugFieldId,
                     return {
                         ...sanitizedField,
                         cases: (field.cases || []).map((caseData, idx) => {
-                            const enumCase: EnumCase = {
+                            const enumCase = {
                                 id: caseData.id || `case-${idx}`,
                                 name: caseData.name,
                                 nameByLocale: {
@@ -225,6 +244,31 @@ export function FieldMapping({ collection, dataSourceResult, initialSlugFieldId,
         framer.notify(`Time format set to ${isChecked ? "12-hour" : "24-hour"}. You may need to re-sync for changes to apply to existing data.`, { variant: "success" })
     }
 
+    // State for Select All toggle
+    const [allSelected, setAllSelected] = useState(true)
+
+    // Effect to update Select All checkbox based on field selection state
+    useEffect(() => {
+        if (fields.length > 0) {
+            const allFieldsSelected = fields.every(f => !ignoredFieldIds.has(f.id));
+            setAllSelected(allFieldsSelected);
+        }
+    }, [fields, ignoredFieldIds]);
+    
+    // Handler for Select All checkbox
+    const handleSelectAllCheckbox = (event: React.ChangeEvent<HTMLInputElement>) => {
+        const checked = event.target.checked;
+        
+        if (checked) {
+            // Select all fields by clearing the ignored set
+            setIgnoredFieldIds(new Set());
+        } else {
+            // Deselect all fields by adding all field IDs to ignored set
+            const allFieldIds = new Set(fields.map(f => f.id));
+            setIgnoredFieldIds(allFieldIds);
+        }
+    }
+
     useEffect(() => {
         const handle = (event: KeyboardEvent) => {
             if (event.key === "Enter") {
@@ -259,7 +303,7 @@ export function FieldMapping({ collection, dataSourceResult, initialSlugFieldId,
                 {/* Content area for slug field and fields list */}
                 <div className="content-scrollable-area">
                     {/* Add Time Format Preference Checkbox at the top */}
-                    <div className="time-format-preference" style={{ marginBottom: "20px", padding: "10px", border: "1px solid #eee", borderRadius: "4px" }}>
+                    <div className="time-format-preference" style={{ marginTop: 0, marginBottom: "10px", padding: "10px", border: "1px solid #eee", borderRadius: "4px" }}>
                         <label htmlFor="timeFormatCheckbox" style={{ display: "flex", alignItems: "center", cursor: "pointer" }}>
                             <input
                                 type="checkbox"
@@ -292,22 +336,33 @@ export function FieldMapping({ collection, dataSourceResult, initialSlugFieldId,
                             {possibleSlugFields.map(possibleSlugField => {
                                 return (
                                     <option key={`slug-field-${possibleSlugField.id}`} value={possibleSlugField.id}>
-                                        {possibleSlugField.name} ({possibleSlugField.id})
+                                        {possibleSlugField.name}
                                     </option>
                                 )
                             })}
                         </select>
                     </label>
 
+                    {/* Select All Toggle Button */}
+                    <label style={{ display: 'flex', alignItems: 'center', margin: '16px 0 8px 0', fontWeight: 500 }}>
+                        <input
+                            type="checkbox"
+                            checked={allSelected}
+                            onChange={handleSelectAllCheckbox}
+                            style={{ marginRight: 8 }}
+                        />
+                        Select All Fields
+                    </label>
+
                     <div className="fields">
                         <span className="fields-column">Column</span>
                         <span>Field</span>
-                        {fields.map(field => (
+                        {fields.map(field => ( // Removed filter: field.type !== "image"
                             <FieldMappingRow
                                 key={`field-${field.id}`}
                                 field={field}
-                                originalFieldName={dataSource.fields.find(sourceField => sourceField.id === field.id)?.name} // Uses destructured dataSource
-                                disabled={ignoredFieldIds.has(field.id)}
+                                originalFieldName={dataSource.fields.find(sourceField => sourceField.id === field.id)?.name}
+                                isIgnored={ignoredFieldIds.has(field.id)} // Pass isIgnored
                                 onToggleDisabled={toggleFieldDisabledState}
                                 onNameChange={changeFieldName}
                             />
@@ -317,17 +372,29 @@ export function FieldMapping({ collection, dataSourceResult, initialSlugFieldId,
 
                 <footer>
                     <hr className="sticky-top" />
-                    <button type="button" onClick={onBack} className="back-button">
-                        Back
-                    </button>
-                    <button type="submit" disabled={isSyncing} tabIndex={0} className="submit-button primary">
+                    <p >
+                            Need help?<br></br> See <a href="https://github.com/jimbaxley/CodaToFramerCMS/blob/main/README.md" target="_blank" rel="noopener noreferrer">plug-in documentation</a>.
+                        </p>
+                    <button
+                        type="submit"
+                        disabled={isSyncing}
+                        tabIndex={0}
+                        className="back-button"
+                    >
                         {isSyncing ? (
                             <div className="framer-spinner" />
                         ) : (
                             <span>
-                                Import <span style={{ textTransform: "capitalize" }}>{dataSourceName}</span>
+                              &rarr;  Import from "{dataSource.name || dataSource.id}" 
                             </span>
                         )}
+                    </button>
+                    <button
+                        type="button"
+                        onClick={onBack}
+                        className="back-button back-button-dark"
+                    >
+                        Back
                     </button>
                 </footer>
             </form>

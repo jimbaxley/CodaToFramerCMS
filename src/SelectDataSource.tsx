@@ -1,9 +1,32 @@
 import { framer } from "framer-plugin"
 import { useState, useEffect } from "react"
-import { getCodaDocs, getCodaTables, type CodaDoc, type CodaTable } from "./data"
+import { type CodaDoc, type CodaTable } from "./types"
+
+// Replace the placeholder getCodaDocs and getCodaTables with real implementations that fetch from the Coda API
+async function getCodaDocs(apiKey: string, signal?: AbortSignal): Promise<CodaDoc[]> {
+    const response = await fetch("https://coda.io/apis/v1/docs", {
+        headers: { Authorization: `Bearer ${apiKey}` },
+        signal,
+    });
+    if (!response.ok) return [];
+    const data = await response.json();
+    // Logging removed for docs
+    return data.items || [];
+}
+
+async function getCodaTables(apiKey: string, docId: string, signal?: AbortSignal): Promise<CodaTable[]> {
+    const response = await fetch(`https://coda.io/apis/v1/docs/${docId}/tables`, {
+        headers: { Authorization: `Bearer ${apiKey}` },
+        signal,
+    });
+    if (!response.ok) return [];
+    const data = await response.json();
+    // Logging removed
+    return data.items || [];
+}
 
 interface SelectDataSourceProps {
-    onSelectDataSource: (config: { apiKey: string; docId: string; tableId: string }) => void
+    onSelectDataSource: (config: { apiKey: string; docId: string; tableId: string; tableName: string }) => void
 }
 
 export function SelectDataSource({ onSelectDataSource }: SelectDataSourceProps) {
@@ -140,11 +163,12 @@ export function SelectDataSource({ onSelectDataSource }: SelectDataSourceProps) 
     }
 
     const handleTableSelect = (table: CodaTable) => {
-        onSelectDataSource({ 
-            apiKey, 
-            docId: selectedDoc?.id || '', 
-            tableId: table.id 
-        })
+        onSelectDataSource({
+            apiKey,
+            docId: selectedDoc?.id || '',
+            tableId: table.id,
+            tableName: table.name
+        });
     }
 
     if (isLoading) {

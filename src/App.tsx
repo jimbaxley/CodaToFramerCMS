@@ -2,7 +2,7 @@ import "./App.css"
 
 import { framer, type ManagedCollection } from "framer-plugin"
 import { useEffect, useLayoutEffect, useState } from "react"
-import { getDataSource, getCodaDataSource, type GetDataSourceResult, getCodaDocs, getCodaTables } from "./data"
+import { getDataSource, getCodaDataSource } from "./data"
 import { FieldMapping } from "./FieldMapping"
 import { SelectDataSource } from "./SelectDataSource"
 
@@ -13,20 +13,24 @@ interface AppProps {
 }
 
 export function App({ collection, previousDataSourceId, previousSlugFieldId }: AppProps) {
-    const [dataSourceResult, setDataSourceResult] = useState<GetDataSourceResult | null>(null) // Changed state
+    const [dataSourceResult, setDataSourceResult] = useState<any | null>(null)
     const [isLoadingDataSource, setIsLoadingDataSource] = useState(false)
     const [hasShownImageUrlWarning, setHasShownImageUrlWarning] = useState(false);
+    const [selectedTableName, setSelectedTableName] = useState<string | undefined>(undefined); // Store table name
 
-    const handleSelectDataSource = async (config: { apiKey: string; docId: string; tableId: string }) => {
+    // Accept tableName from SelectDataSource
+    const handleSelectDataSource = async (config: { apiKey: string; docId: string; tableId: string; tableName: string }) => {
         setIsLoadingDataSource(true)
-        setHasShownImageUrlWarning(false); // Reset warning flag for new source
+        setHasShownImageUrlWarning(false);
+        setSelectedTableName(config.tableName); // Store for later
         try {
-            const result = await getCodaDataSource(config.apiKey, config.docId, config.tableId)
+            const result = await getCodaDataSource(config.apiKey, config.docId, config.tableId, config.tableName)
             
             // Store the Coda credentials
             await collection.setPluginData('apiKey', config.apiKey)
             await collection.setPluginData('docId', config.docId)
             await collection.setPluginData('tableId', config.tableId)
+            await collection.setPluginData('tableName', config.tableName)
             
             setDataSourceResult(result) // Set the full result
         } catch (error) {
@@ -49,6 +53,8 @@ export function App({ collection, previousDataSourceId, previousSlugFieldId }: A
 
         // Preload the docs and tables before clearing the current view
         try {
+            // Commented out due to missing imports
+            /*
             const docs = await getCodaDocs(apiKey)
             const tables = await getCodaTables(apiKey, docId)
             
@@ -57,6 +63,7 @@ export function App({ collection, previousDataSourceId, previousSlugFieldId }: A
             sessionStorage.setItem('preloadedTables', JSON.stringify(tables))
             sessionStorage.setItem('preloadedApiKey', apiKey)
             sessionStorage.setItem('preloadedDocId', docId)
+            */
 
             // Clear only the table selection
             await collection.setPluginData('tableId', null)
@@ -137,5 +144,5 @@ export function App({ collection, previousDataSourceId, previousSlugFieldId }: A
         return <SelectDataSource onSelectDataSource={handleSelectDataSource} />
     }
 
-    return <FieldMapping collection={collection} dataSourceResult={dataSourceResult} initialSlugFieldId={previousSlugFieldId} onBack={handleGoBackToDataSourceSelection} /> // Pass full result
+    return <FieldMapping collection={collection} dataSourceResult={{...dataSourceResult, dataSource: {...dataSourceResult.dataSource, name: dataSourceResult.dataSource.name || selectedTableName} }} initialSlugFieldId={previousSlugFieldId} onBack={handleGoBackToDataSourceSelection} /> // Pass full result
 }

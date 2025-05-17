@@ -7,6 +7,8 @@ import {
     type EnumCaseDataInput
 } from "framer-plugin"
 import { type CodaColumn, type CodaDoc, type CodaTable, type DataSource, type GetDataSourceResult, type EnumCase } from "./types"
+import { marked } from "marked";
+import DOMPurify from "dompurify";
 
 export const PLUGIN_KEYS = {
     DATA_SOURCE_ID: "dataSourceId",
@@ -15,6 +17,7 @@ export const PLUGIN_KEYS = {
 
 export interface DataSource {
     id: string
+    name?: string
     fields: readonly ManagedCollectionFieldInput[]
     items: Record<string, FieldDataEntryInput>[]
 }
@@ -43,10 +46,11 @@ export interface GetDataSourceResult {
 export async function getDataSource(abortSignal?: AbortSignal): Promise<GetDataSourceResult> { // Modified return type
     // Get existing Coda settings from plugin data
     const collection = await framer.getActiveManagedCollection();
-    const [apiKey, docId, tableId] = await Promise.all([
+    const [apiKey, docId, tableId, tableName] = await Promise.all([
         collection.getPluginData('apiKey'),
         collection.getPluginData('docId'),
-        collection.getPluginData('tableId')
+        collection.getPluginData('tableId'),
+        collection.getPluginData('tableName')
     ]);
     
     if (!apiKey || !docId || !tableId) {
@@ -54,7 +58,7 @@ export async function getDataSource(abortSignal?: AbortSignal): Promise<GetDataS
     }
 
     // Use the existing getCodaDataSource function to fetch data
-    return getCodaDataSource(apiKey, docId, tableId, abortSignal); // Will now return GetDataSourceResult
+    return getCodaDataSource(apiKey, docId, tableId, tableName || undefined, abortSignal); // Will now return GetDataSourceResult
 }
 
 interface CodaColumn {
@@ -73,9 +77,37 @@ interface CodaColumn {
     };
 }
 
+// Helper: check if a string is a likely image URL (common extensions)
+function isLikelyImageUrl(url: string): boolean {
+    if (typeof url !== 'string') return false;
+    const trimmed = url.trim();
+    // Accepts .jpg, .jpeg, .png, .gif, .webp, .svg, .bmp, .tiff, .ico, .apng, .avif
+    // OR any codahosted.io URL (with or without extension)
+    return (
+        /^https?:\/\/[^\s]+\.(jpe?g|png|gif|webp|svg|bmp|tiff?|ico|apng|avif)(\?.*)?$/i.test(trimmed) ||
+        /^https?:\/\/codahosted\.io\//.test(trimmed)
+    );
+}
+
 // Helper function to map Coda types to Framer types
-function mapCodaTypeToFramerType(column: CodaColumn): ManagedCollectionFieldInput {
-    const baseType = column.format.type.toLowerCase()
+function mapCodaTypeToFramerType(column: CodaColumn, _sampleValues: unknown[]): ManagedCollectionFieldInput {
+    const baseType = column.format.type.toLowerCase();
+    const name = column.name.toLowerCase();
+    const id = column.id.toLowerCase();
+    // Map as image if Coda type is 'image' or name/id contains 'image' or 'graphic'
+    if (
+        baseType === 'image' ||
+        name.includes('image') ||
+        name.includes('graphic') ||
+        id.includes('image') ||
+        id.includes('graphic')
+    ) {
+        return {
+            id: column.id,
+            name: column.name,
+            type: 'image',
+        };
+    }
     
     switch (baseType) {
         case 'select':
@@ -142,6 +174,11 @@ function mapCodaTypeToFramerType(column: CodaColumn): ManagedCollectionFieldInpu
             }
         case 'canvas':
         case 'richtext':
+            // Log the column format to understand what metadata is available
+            console.log(`Mapping ${baseType} field:`, {
+                column,
+                format: column.format
+            });
             return {
                 id: column.id,
                 name: column.name,
@@ -173,6 +210,27 @@ function mapCodaTypeToFramerType(column: CodaColumn): ManagedCollectionFieldInpu
 }
 
 // Helper function to transform Coda values to Framer values
+const ALLOWED_TAGS = [
+    'h1','h2','h3','h4','h5','h6',
+    'p','a','ul','ol','li','strong','em','img',
+    'table','thead','tbody','tr','th','td',
+    'blockquote','code','pre','br','hr','span'
+];
+
+function markdownToSanitizedHtml(md: string): string {
+    // Use marked.parseSync if available, otherwise fallback to marked (sync)
+    const rawHtml = (marked as any).parseSync ? (marked as any).parseSync(md) : marked(md);
+    // DOMPurify only allows a subset of config, so we use ALLOWED_TAGS and basic attributes
+    return DOMPurify.sanitize(rawHtml, {
+        ALLOWED_TAGS,
+        ALLOWED_ATTR: [
+            'href', 'name', 'target', 'rel',
+            'src', 'alt', 'title', 'width', 'height',
+            'colspan', 'rowspan', 'style'
+        ]
+    });
+}
+
 function transformCodaValue(value: any, field: ManagedCollectionFieldInput, codaColumnType: string, use12HourTime?: boolean): FieldDataEntryInput | null {
     // 1. Handle null/undefined/empty based on Framer field.type
     if (value === null || value === undefined || (typeof value === 'string' && value.trim() === '')) {
@@ -234,9 +292,22 @@ function transformCodaValue(value: any, field: ManagedCollectionFieldInput, coda
                         numericValue = 0;
                     }
                 }
-            } else if (typeof value === 'object' && value !== null && 'value' in value && typeof value.value === 'number') {
-                // Handle case where Coda sends a value wrapper object
-                numericValue = value.value;
+            } else if (typeof value === 'object' && value !== null) {
+                // Handle schema.org MonetaryAmount format
+                if (value['@type'] === 'MonetaryAmount' && typeof value.amount === 'number') {
+                    numericValue = value.amount;
+                }
+                // Handle simple value wrapper object
+                else if ('value' in value && typeof value.value === 'number') {
+                    numericValue = value.value;
+                }
+                // Handle raw number in object
+                else if ('amount' in value && typeof value.amount === 'number') {
+                    numericValue = value.amount;
+                } else {
+                    console.warn(`Unexpected object value for number field ${field.name}: ${JSON.stringify(value)}. Falling back to 0.`);
+                    numericValue = 0;
+                }
             } else {
                 console.warn(`Unexpected value type for number field ${field.name}: ${JSON.stringify(value)}. Falling back to 0.`);
                 numericValue = 0;
@@ -269,101 +340,158 @@ function transformCodaValue(value: any, field: ManagedCollectionFieldInput, coda
                 console.warn(`Error parsing date value for field ${field.name}: ${value} (Error: ${e.message}). Falling back to empty string.`);
                 return { type: 'date', value: '' };
             }
-        case 'string': 
-            if (codaColumnType === 'time') { 
-                try {
-                    let hours24: number;
-                    let minutes: number;
-                    let seconds: number;
-
-                    if (typeof value === 'string' && value.startsWith('PT')) {
-                        // Parse ISO 8601 duration for time of day
-                        // Example: PT8H30M0S -> hours=8, minutes=30, seconds=0
-                        // Example: PT17H45M  -> hours=17, minutes=45, seconds=0
-                        const hoursMatch = value.match(/(\d+)H/);
-                        const minutesMatch = value.match(/(\d+)M/);
-                        const secondsMatch = value.match(/(\d+)S/);
-                        
-                        hours24 = hoursMatch && hoursMatch[1] ? parseInt(hoursMatch[1], 10) : 0;
-                        minutes = minutesMatch && minutesMatch[1] ? parseInt(minutesMatch[1], 10) : 0;
-                        seconds = secondsMatch && secondsMatch[1] ? parseInt(secondsMatch[1], 10) : 0;
-
-                        if (isNaN(hours24) || isNaN(minutes) || isNaN(seconds)) {
-                            console.warn(`Invalid ISO duration time value encountered for field ${field.name}: ${value}. Falling back to empty string.`);
-                            return { type: 'string', value: '' };
-                        }
+        case 'formattedText': 
+            if (codaColumnType === 'canvas' || codaColumnType === 'richtext') {
+                let md = '';
+                if (typeof value === 'object' && value !== null) {
+                    if ('content' in value && typeof value.content === 'string') {
+                        md = value.content;
+                    } else if ('value' in value && typeof value.value === 'string') {
+                        md = value.value;
                     } else {
-                        // Fallback for when Coda might send a full datetime string for a 'time' type
-                        // or if the value is already a Date object (less likely from API but good for robustness)
-                        const dateObj = new Date(value); 
-                        if (isNaN(dateObj.getTime())) {
-                            console.warn(`Invalid date-based time value encountered for field ${field.name}: ${value}. Falling back to empty string.`);
-                            return { type: 'string', value: '' };
-                        }
-                        // Use local time zone components
-                        hours24 = dateObj.getHours();
-                        minutes = dateObj.getMinutes();
-                        seconds = dateObj.getSeconds();
+                        const serialized = JSON.stringify(value);
+                        if (serialized !== '{}') md = serialized;
                     }
-                    
-                    if (use12HourTime) {
-                        const ampm = hours24 >= 12 ? 'PM' : 'AM';
-                        let hours12 = hours24 % 12;
-                        hours12 = hours12 ? hours12 : 12; // Convert 0 (midnight) to 12, and 12 (noon) to 12
-                        
-                        const stringHours12 = hours12.toString(); 
-                        const paddedMinutes = minutes.toString().padStart(2, '0');
-                        return { type: 'string', value: `${stringHours12}:${paddedMinutes} ${ampm}` };
-                    } else {
-                        // Default to 24-hour format with seconds
-                        const paddedHours24 = hours24.toString().padStart(2, '0');
-                        const paddedMinutes = minutes.toString().padStart(2, '0');
-                        const paddedSeconds = seconds.toString().padStart(2, '0');
-                        return { type: 'string', value: `${paddedHours24}:${paddedMinutes}:${paddedSeconds}` };
-                    }
-                } catch (e: any) {
-                    console.warn(`Error parsing time value for field ${field.name}: ${value} (Error: ${e.message}). Falling back to empty string.`);
-                    return { type: 'string', value: '' };
+                } else if (typeof value === 'string') {
+                    md = value;
                 }
+                // Convert markdown to sanitized HTML
+                return { type: 'formattedText', value: markdownToSanitizedHtml(md) };
             }
-            if (typeof value === 'object' && value !== null) {
-                if ('name' in value && typeof value.name === 'string') {
-                    return { type: 'string', value: value.name };
-                }
-                if ('display' in value && typeof value.display === 'string') { 
-                    return { type: 'string', value: value.display };
-                }
-                try {
-                    return { type: 'string', value: JSON.stringify(value) };
-                } catch (e) {
-                    return { type: 'string', value: '[unstringifiable object]' };
-                }
-            }
-            return { type: 'string', value: String(value) };
+            return { type: 'formattedText', value: String(value) };
+        // For all other string-like fields, strip markdown
+        case 'string':
+            // Special handling for Coda text fields that may come as objects or arrays
+            let textValue = '';
 
-        case 'image': { 
+            // For debugging text fields only
+            if (codaColumnType === 'text') {
+                console.log(`[Text Processing] Field "${field.name}" metadata:`, {
+                    valueType: typeof value,
+                    isArray: Array.isArray(value),
+                    hasRawValue: value && typeof value === 'object' && 'rawValue' in value,
+                    hasValue: value && typeof value === 'object' && 'value' in value,
+                });
+            }
+
+            // Handle arrays (including rawValue arrays)
+            if (Array.isArray(value) || (value && typeof value === 'object' && Array.isArray((value as any).rawValue))) {
+                const arr = Array.isArray(value) ? value : (value as any).rawValue;
+                textValue = arr
+                    .map((v: unknown) => {
+                        if (typeof v === 'string') return v;
+                        if (v && typeof v === 'object') {
+                            // Try to extract the most meaningful text representation
+                            const obj = v as Record<string, unknown>;
+                            return (
+                                (typeof obj.value === 'string' && obj.value) ||
+                                (typeof obj.displayValue === 'string' && obj.displayValue) ||
+                                (typeof obj.name === 'string' && obj.name) ||
+                                String(v)
+                            );
+                        }
+                        return String(v);
+                    })
+                    .filter(Boolean)
+                    .join(', ');
+            }
+            // Handle object values
+            else if (value && typeof value === 'object') {
+                const obj = value as Record<string, unknown>;
+                textValue = 
+                    (typeof obj.value === 'string' && obj.value) ||
+                    (typeof obj.displayValue === 'string' && obj.displayValue) ||
+                    (typeof obj.name === 'string' && obj.name) ||
+                    String(value);
+            }
+            // Handle simple values
+            else {
+                textValue = String(value);
+            }
+
+            return { type: 'string', value: stripMarkdown(textValue) };
+        case 'image': {
             let imageUrl = '';
+            // Handle string values (direct URLs or markdown)
             if (typeof value === 'string') {
-                imageUrl = value;
-            } else if (typeof value === 'object' && value !== null) {
+                imageUrl = extractUrlFromMarkdown(value);
+            }
+            // Handle schema.org ImageObject and other object values
+            else if (typeof value === 'object' && value !== null) {
+                // Handle schema.org ImageObject format
+                // Handle array of ImageObjects
+                if (Array.isArray(value)) {
+                    for (const item of value) {
+                        if (item['@type'] === 'ImageObject') {
+                            const urls = [item.url, item.contentUrl, item.thumbnailUrl].filter(u => typeof u === 'string');
+                            for (const url of urls) {
+                                if (isValidAssetUrl(url) || isLikelyImageUrl(url)) {
+                                    imageUrl = url;
+                                    break;
+                                }
+                            }
+                            if (imageUrl) break;
+                        }
+                    }
+                }
+                // Handle single ImageObject
+                else if (value['@type'] === 'ImageObject') {
+                    const urls = [value.url, value.contentUrl, value.thumbnailUrl].filter(u => typeof u === 'string');
+                    for (const url of urls) {
+                        if (isValidAssetUrl(url) || isLikelyImageUrl(url)) {
+                            imageUrl = url;
+                            break;
+                        }
+                    }
+                }
+                // Check all possible URL locations in the object
                 if ('url' in value && typeof value.url === 'string') {
                     imageUrl = value.url;
-                } else if ('link' in value && typeof value.link === 'string') { 
+                } else if ('link' in value && typeof value.link === 'string') {
                     imageUrl = value.link;
+                } else if ('value' in value && typeof value.value === 'string') {
+                    // Handle nested value objects
+                    imageUrl = extractUrlFromMarkdown(value.value);
+                } else if ('rawValue' in value && typeof value.rawValue === 'string') {
+                    // Handle raw values that might contain URLs
+                    imageUrl = extractUrlFromMarkdown(value.rawValue);
+                } else if ('imageUrl' in value && typeof value.imageUrl === 'string') {
+                    // Direct image URL property
+                    imageUrl = value.imageUrl;
+                } else if ('thumbnailUrl' in value && typeof value.thumbnailUrl === 'string') {
+                    // Fallback to thumbnail if available
+                    imageUrl = value.thumbnailUrl;
+                }
+                
+                // Handle linked record cases
+                if (!imageUrl && 'linkedRow' in value && typeof value.linkedRow === 'object' && value.linkedRow !== null) {
+                    const linkedRow = value.linkedRow;
+                    if ('url' in linkedRow && typeof linkedRow.url === 'string') {
+                        imageUrl = linkedRow.url;
+                    } else if ('imageUrl' in linkedRow && typeof linkedRow.imageUrl === 'string') {
+                        imageUrl = linkedRow.imageUrl;
+                    }
                 }
             }
-            // Validate if imageUrl is an absolute URL
-            if (imageUrl && (imageUrl.startsWith('http://') || imageUrl.startsWith('https://'))) {
-                return { type: 'image', value: imageUrl }; 
-            }
-            console.warn(`Invalid or non-absolute image URL for field ${field.name}: '${imageUrl}'. Skipping asset.`);
-            return null; // Return null if URL is not valid or not absolute
-        }
 
-        case 'file': { 
+            // Validate and return the image URL
+            if (imageUrl && (isValidAssetUrl(imageUrl) || isLikelyImageUrl(imageUrl))) {
+                return { type: 'image', value: imageUrl.trim() };
+            }
+
+            // Log warning for invalid/missing URLs
+            console.warn(`Invalid or missing image URL for field ${field.name}:`, { 
+                rawValue: value,
+                processedUrl: imageUrl || '(none)',
+                validUrl: Boolean(imageUrl && isValidAssetUrl(imageUrl)),
+                likelyImage: Boolean(imageUrl && isLikelyImageUrl(imageUrl))
+            });
+            return null;
+        }
+        case 'file': {
             let fileUrl = '';
-            if (typeof value === 'string') { 
-                fileUrl = value;
+            if (typeof value === 'string') {
+                fileUrl = extractUrlFromMarkdown(value);
             } else if (typeof value === 'object' && value !== null) {
                 if ('url' in value && typeof value.url === 'string') {
                     fileUrl = value.url;
@@ -371,17 +499,12 @@ function transformCodaValue(value: any, field: ManagedCollectionFieldInput, coda
                     fileUrl = value.link;
                 }
             }
-            // Validate if fileUrl is an absolute URL
-            if (fileUrl && (fileUrl.startsWith('http://') || fileUrl.startsWith('https://'))) {
-                return { type: 'file', value: fileUrl }; 
+            if (fileUrl && isValidAssetUrl(fileUrl)) {
+                return { type: 'file', value: fileUrl.trim() }; 
             }
-            console.warn(`Unsupported or non-absolute file value for field ${field.name}: '${fileUrl}'. Skipping asset.`);
-            return null; // Return null if URL is not valid or not absolute
+            console.warn(`Unsupported or non-absolute file value for field ${field.name}: '${fileUrl}'. Skipping asset.`, { value });
+            return null;
         }
-
-        case 'formattedText': 
-            return { type: 'formattedText', value: String(value) };
-
         case 'link': { 
             let linkUrl = '';
             if (typeof value === 'object' && value !== null && 'url' in value && typeof value.url === 'string') {
@@ -426,64 +549,77 @@ function transformCodaValue(value: any, field: ManagedCollectionFieldInput, coda
     }
 }
 
+// Utility to unwrap markdown code block/backtick formatting
+function stripMarkdown(text: string): string {
+    // Unwrap triple backticks if present
+    const triple = text.match(/^```([\s\S]*?)```$/);
+    if (triple && typeof triple[1] === 'string') return triple[1].trim();
+    // Unwrap single backticks if present
+    const single = text.match(/^`([^`]*)`$/);
+    if (single && typeof single[1] === 'string') return single[1].trim();
+    return text.trim();
+}
+
+// Utility to extract image/file URL from markdown or backticks
+function extractUrlFromMarkdown(text: string): string {
+    // Match markdown image: ![alt](url)
+    const mdImg = text.match(/!\[[^\]]*\]\(([^)]+)\)/);
+    if (mdImg && mdImg[1]) return mdImg[1].trim();
+    // Unwrap backticks if present
+    const triple = text.match(/^```([\s\S]*?)```$/);
+    if (triple && typeof triple[1] === 'string') return triple[1].trim();
+    const single = text.match(/^`([^`]*)`$/);
+    if (single && typeof single[1] === 'string') return single[1].trim();
+    return text.trim();
+}
+
+// Utility to check if a string is a valid image/file URL (http(s) or codahosted.io)
+function isValidAssetUrl(url: string): boolean {
+    const trimmed = url.trim();
+    return (
+        trimmed.startsWith('http://') ||
+        trimmed.startsWith('https://') ||
+        trimmed.includes('codahosted.io/')
+    );
+}
+
 export async function getCodaDataSource(
     apiKey: string,
     docId: string,
     tableId: string,
+    tableName?: string,
     signal?: AbortSignal
-): Promise<GetDataSourceResult> { // Modified return type
+): Promise<GetDataSourceResult> {
     const headers = {
         'Authorization': `Bearer ${apiKey}`,
         'Content-Type': 'application/json'
     }
 
-    let hasImageOrFileFields = false; // Track if any image/file fields exist
-    let hasValidImageOrFileUrls = false; // Track if any valid URLs are found
+    let hasImageOrFileFields = false;
+    let hasValidImageOrFileUrls = false;
 
     // First, fetch the columns metadata
     const columnsUrl = `https://coda.io/apis/v1/docs/${docId}/tables/${tableId}/columns`
     const columnsResponse = await fetch(columnsUrl, {
         ...(signal ? { signal } : {}),
-        headers,
+        headers
     })
 
     if (!columnsResponse.ok) {
-        const errorText = await columnsResponse.text()
-        throw new Error(`Failed to fetch columns from Coda: ${columnsResponse.status} ${errorText}`)
+        throw new Error(`Failed to fetch data from Coda: ${columnsResponse.status}`)
     }
 
     const columnsData = await columnsResponse.json()
-    const columns: CodaColumn[] = columnsData.items
-        .filter((col: CodaColumn) => col.display !== false)
-        .map((col: CodaColumn) => ({
+
+    const columns = columnsData.items
+        .map((col: any) => ({
             id: col.id,
             name: String(col.name || col.id),
             format: col.format
-        }))
+        })) as CodaColumn[];
 
-    // Map columns to Framer fields with proper types and enum cases
-    const fields = columns.map(col => {
-        const mappedField = mapCodaTypeToFramerType(col);
-        if (mappedField.type === 'image' || mappedField.type === 'file') {
-            hasImageOrFileFields = true;
-        }
-        return mappedField;
-    });
-    const fieldMap = new Map<string, ManagedCollectionFieldInput>(
-        fields.map((field: ManagedCollectionFieldInput) => [field.id, field])
-    )
-    // Store original Coda column types
-    const codaColumnTypeMap = new Map<string, string>(
-        columns.map(col => [col.id, col.format.type.toLowerCase()])
-    )
-
-    // TODO: In a future step, retrieve user preference for 12-hour time format here.
-    // For example: const use12HourTimePreference = await framer.getPluginData("use12HourTimeFormat") === "true";
-    const use12HourTimePreferenceRaw = await framer.getPluginData("use12HourTimeFormat");
-    const use12HourTimePreference = use12HourTimePreferenceRaw === "true";
-
-    // Then fetch the rows
-    const rowsUrl = `https://coda.io/apis/v1/docs/${docId}/tables/${tableId}/rows`
+    // Fetch rows with rich text formatting
+    const rowsUrl = `https://coda.io/apis/v1/docs/${docId}/tables/${tableId}/rows?useRichText=true&valueFormat=rich`
     const rowsResponse = await fetch(rowsUrl, {
         ...(signal ? { signal } : {}),
         headers,
@@ -496,9 +632,38 @@ export async function getCodaDataSource(
 
     const rowsData = await rowsResponse.json()
 
+    // Add debug logging to see raw data structure
+    console.log('Raw Coda API response:', {
+        firstRow: rowsData.items[0],
+        rowStructure: Object.keys(rowsData.items[0] || {})
+    });
+
+    const firstRow = rowsData.items[0]?.values || {};
+
+    // Instead of using only the first row, gather all values for each column
+    // But now, sampleValues is not used for image detection, so we can just pass an empty array or undefined
+    const fields = columns.map((col: CodaColumn) => {
+        // Only use type/name/id for mapping, not values
+        const mappedField = mapCodaTypeToFramerType(col, []);
+        if (mappedField.type === 'image' || mappedField.type === 'file') {
+            hasImageOrFileFields = true;
+        }
+        return mappedField;
+    });
+
+    const fieldMap = new Map<string, ManagedCollectionFieldInput>(
+        fields.map((field: ManagedCollectionFieldInput) => [field.id, field])
+    )
+    
+    const codaColumnTypeMap = new Map<string, string>(
+        columns.map((col: CodaColumn) => [col.id, col.format.type.toLowerCase()])
+    )
+
+    const use12HourTimePreferenceRaw = await framer.getPluginData("use12HourTimeFormat");
+    const use12HourTimePreference = use12HourTimePreferenceRaw === "true";
+
     const items = rowsData.items.map((row: { id: string; values: Record<string, unknown> }) => {
         const fieldData: Record<string, FieldDataEntryInput> = {
-            // Add the row ID as a special field
             _id: {
                 type: "string",
                 value: row.id
@@ -506,15 +671,13 @@ export async function getCodaDataSource(
         }
 
         for (const [key, value] of Object.entries(row.values)) {
-            // Only include fields that are in our field map
             const field = fieldMap.get(key)
             if (field) {
-                const codaType = codaColumnTypeMap.get(key) || 'text'; // Default to text if not found
+                const codaType = codaColumnTypeMap.get(key) || 'text';
                 const transformedEntry = transformCodaValue(value, field, codaType, use12HourTimePreference)
                 if (transformedEntry !== null) {
                     fieldData[key] = transformedEntry;
                     if (field.type === 'image' || field.type === 'file') {
-                        // Check if the value is not an empty string, indicating a valid URL was processed
                         if (transformedEntry.value && typeof transformedEntry.value === 'string' && transformedEntry.value.trim() !== '') {
                             hasValidImageOrFileUrls = true;
                         }
@@ -531,6 +694,7 @@ export async function getCodaDataSource(
     return {
         dataSource: {
             id: tableId,
+            name: tableName,
             fields,
             items,
         },
