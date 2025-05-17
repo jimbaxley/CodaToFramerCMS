@@ -4,9 +4,10 @@ import {
     framer,
     type ManagedCollection,
     type ManagedCollectionItemInput,
-    type EnumCaseDataInput
+    type EnumCaseDataInput,
+    type LocalizedValueUpdate // Added import for LocalizedValueUpdate
 } from "framer-plugin"
-import { type CodaColumn, type CodaDoc, type CodaTable, type DataSource, type GetDataSourceResult, type EnumCase } from "./types"
+import { type CodaColumn, type CodaDoc, type CodaTable, type DataSource, type GetDataSourceResult, type EnumCase, type DateFieldDataEntryInput } from "./types" // Corrected import path and ensured DateFieldDataEntryInput is imported
 import { marked } from "marked";
 import DOMPurify from "dompurify";
 
@@ -231,7 +232,7 @@ function markdownToSanitizedHtml(md: string): string {
     });
 }
 
-function transformCodaValue(value: any, field: ManagedCollectionFieldInput, codaColumnType: string, use12HourTime?: boolean): FieldDataEntryInput | null {
+function transformCodaValue(value: any, field: ManagedCollectionFieldInput, codaColumnType: string, use12HourTime?: boolean): FieldDataEntryInput | DateFieldDataEntryInput | null { // Modified return type
     // 1. Handle null/undefined/empty based on Framer field.type
     if (value === null || value === undefined || (typeof value === 'string' && value.trim() === '')) {
         switch (field.type) {
@@ -243,6 +244,10 @@ function transformCodaValue(value: any, field: ManagedCollectionFieldInput, coda
                 return { type: 'boolean', value: false };
             case 'date':
                 // Use 12/31/1999 as default since Framer requires a valid date
+                // For date-only, ensure it's just the date part, for datetime/time, include time.
+                if (codaColumnType === 'date') {
+                    return { type: 'date', value: '1999-12-31' }; // Framer expects YYYY-MM-DD for date-only
+                }
                 return { type: 'date', value: '1999-12-31T00:00:00.000Z' }; 
             case 'image':
                 return { type: 'image', value: '' }; // Value is string URL
@@ -319,26 +324,70 @@ function transformCodaValue(value: any, field: ManagedCollectionFieldInput, coda
             try {
                 const dateObj = new Date(value);
                 if (isNaN(dateObj.getTime())) {
-                    console.warn(`Invalid date value encountered for field ${field.name}: ${value}. Using 12/31/1999 as fallback.`);
-                    return { type: 'date', value: '1999-12-31T00:00:00.000Z' };
+                    console.warn(`Invalid date value encountered for field ${field.name}: ${value}. Using fallback.`);
+                    return codaColumnType === 'date'
+                        ? { type: 'date', value: '1999-12-31' }
+                        : { type: 'date', value: '1999-12-31T00:00:00.000Z' };
                 }
 
-                // Normalize dates to UTC midnight for date-only values, preserving local date
-                if (codaColumnType === 'date' && value) {
-                    // Extract date parts from the local timezone representation
-                    const year = dateObj.getFullYear();
-                    const month = (dateObj.getMonth() + 1).toString().padStart(2, '0');
-                    const day = dateObj.getDate().toString().padStart(2, '0');
-                    
-                    // Create a new UTC date string at midnight
-                    return { type: 'date', value: `${year}-${month}-${day}T00:00:00.000Z` };
+                // Handle Coda 'date' (date-only) type
+                if (codaColumnType === 'date') {
+                    // Format as YYYY-MM-DD for Framer's date type
+                    const year = dateObj.getUTCFullYear();
+                    const month = (dateObj.getUTCMonth() + 1).toString().padStart(2, '0');
+                    const day = dateObj.getUTCDate().toString().padStart(2, '0');
+                    return { type: 'date', value: `${year}-${month}-${day}` };
                 }
-                
-                // For 'datetime' type, convert to UTC while preserving the exact moment in time
-                return value ? { type: 'date', value: dateObj.toISOString() } : { type: 'date', value: '1999-12-31T00:00:00.000Z' };
+
+                // Handle Coda 'datetime' and 'time' types
+                if (codaColumnType === 'datetime' || codaColumnType === 'time') {
+                    const isoDate = dateObj.toISOString();
+                    let displayTime: string;
+
+                    // Use local time for display formatting
+                    const localDateObj = new Date(value); // Re-parse to ensure local interpretation for formatting
+                    const hours = localDateObj.getHours();
+                    const minutes = localDateObj.getMinutes();
+                    const seconds = localDateObj.getSeconds();
+
+                    if (use12HourTime) {
+                        const ampm = hours >= 12 ? 'PM' : 'AM';
+                        const formattedHours = hours % 12 || 12;
+                        displayTime = `${formattedHours}:${minutes.toString().padStart(2, '0')}${seconds ? ':' + seconds.toString().padStart(2, '0') : ''} ${ampm}`;
+                    } else {
+                        displayTime = `${hours.toString().padStart(2, '0')}:${minutes.toString().padStart(2, '0')}${seconds ? ':' + seconds.toString().padStart(2, '0') : ''}`;
+                    }
+
+                    if (codaColumnType === 'time') {
+                        // For time-only, Framer still expects a full ISO string for the 'date' type.
+                        // We store the original time in a standard date (e.g., 1970-01-01) and provide the formatted time string in displayValue.
+                        // Extract time parts from the original ISO string to maintain UTC time for storage
+                        const timePart = isoDate.split('T')[1];
+                        return {
+                            type: 'date' // Framer's field type
+                            ,
+                            value: `1970-01-01T${timePart}`, // Store as full ISO but with a fixed date
+                            displayValue: displayTime
+                        } as DateFieldDataEntryInput;
+                    }
+
+                    // For 'datetime', store the full ISO string and provide the formatted time string in displayValue.
+                    return {
+                        type: 'date', // Framer's field type
+                        value: isoDate, // Store full ISO string
+                        displayValue: displayTime
+                    } as DateFieldDataEntryInput;
+                }
+
+                // Default for other date-like values (should ideally be covered by 'date' or 'datetime')
+                // If it's not 'date', 'datetime', or 'time', but Framer type is 'date', store as full ISO.
+                return { type: 'date', value: dateObj.toISOString() };
+
             } catch (e: any) {
-                console.warn(`Error parsing date value for field ${field.name}: ${value} (Error: ${e.message}). Falling back to empty string.`);
-                return { type: 'date', value: '' };
+                console.warn(`Error parsing date value for field ${field.name}: ${value} (Error: ${e.message}). Falling back.`);
+                return codaColumnType === 'date'
+                    ? { type: 'date', value: '1999-12-31' }
+                    : { type: 'date', value: '1999-12-31T00:00:00.000Z' };
             }
         case 'formattedText': 
             if (codaColumnType === 'canvas' || codaColumnType === 'richtext') {
@@ -360,34 +409,91 @@ function transformCodaValue(value: any, field: ManagedCollectionFieldInput, coda
             }
             return { type: 'formattedText', value: String(value) };
         // For all other string-like fields, strip markdown
-        case 'string':
-            // Special handling for Coda text fields that may come as objects or arrays
-            let textValue = '';
+        case 'string': {
+            if (codaColumnType === 'time') {
+                try {
+                    let hours: number | undefined, minutes: number | undefined, secondsVal: number | undefined;
+                    let successfullyParsed = false;
 
+                    if (typeof value === 'string') {
+                        // Try to match "HH:mm" or "HH:mm:ss"
+                        const timeOnlyMatch = value.match(/^([0-1]?\d|2[0-3]):([0-5]\d)(:([0-5]\d))?$/);
+                        if (timeOnlyMatch) {
+                            hours = parseInt(timeOnlyMatch[1]!, 10); // Added non-null assertion
+                            minutes = parseInt(timeOnlyMatch[2]!, 10); // Added non-null assertion
+                            secondsVal = timeOnlyMatch[4] ? parseInt(timeOnlyMatch[4], 10) : 0;
+                            successfullyParsed = true;
+                        } else {
+                            // If not a simple time string, try parsing as a full date string
+                            // Coda might send "1899-12-30T19:00:00.000-05:00" for its 'time' type
+                            const dateObj = new Date(value);
+                            if (!isNaN(dateObj.getTime())) {
+                                hours = dateObj.getHours(); // getHours() reflects the time in the date's effective timezone
+                                minutes = dateObj.getMinutes();
+                                secondsVal = dateObj.getSeconds();
+                                successfullyParsed = true;
+                            }
+                        }
+                    } else if (value instanceof Date) {
+                        // If Coda provides a Date object directly
+                        hours = value.getHours();
+                        minutes = value.getMinutes();
+                        secondsVal = value.getSeconds();
+                        successfullyParsed = true;
+                    }
+
+                    if (successfullyParsed && hours !== undefined && minutes !== undefined && secondsVal !== undefined) {
+                        let formattedTime: string;
+                        if (use12HourTime) {
+                            const ampm = hours >= 12 ? 'PM' : 'AM';
+                            const formattedHours = hours % 12 || 12; // Convert 0 or 12 to 12 for 12hr format
+                            formattedTime = `${formattedHours}:${minutes.toString().padStart(2, '0')}`;
+                            if (secondsVal > 0) {
+                               formattedTime += `:${secondsVal.toString().padStart(2, '0')}`;
+                            }
+                            formattedTime += ` ${ampm}`;
+                        } else {
+                            formattedTime = `${hours.toString().padStart(2, '0')}:${minutes.toString().padStart(2, '0')}`;
+                            if (secondsVal > 0) {
+                               formattedTime += `:${secondsVal.toString().padStart(2, '0')}`;
+                            }
+                        }
+                        return { type: 'string', value: formattedTime };
+                    } else {
+                        console.warn(`Invalid or unparseable time value for Coda 'time' field ${field.name}: ${JSON.stringify(value)}. Falling back to generic string processing.`);
+                        // Fall through to generic string processing if parsing specifically for 'time' fails
+                    }
+                } catch (e: any) {
+                    console.warn(`Error processing Coda 'time' field ${field.name} (value: ${JSON.stringify(value)}): ${e.message}. Falling back to generic string processing.`);
+                    // Fall through to generic string processing on error
+                }
+            }
+
+            // General string processing (also serves as fallback for 'time' if parsing/formatting fails)
+            let textValue = '';
             // For debugging text fields only
             if (codaColumnType === 'text') {
                 console.log(`[Text Processing] Field "${field.name}" metadata:`, {
                     valueType: typeof value,
                     isArray: Array.isArray(value),
+                    valuePreview: typeof value === 'string' ? value.substring(0,100) : JSON.stringify(value).substring(0,100),
                     hasRawValue: value && typeof value === 'object' && 'rawValue' in value,
                     hasValue: value && typeof value === 'object' && 'value' in value,
                 });
             }
 
-            // Handle arrays (including rawValue arrays)
             if (Array.isArray(value) || (value && typeof value === 'object' && Array.isArray((value as any).rawValue))) {
                 const arr = Array.isArray(value) ? value : (value as any).rawValue;
                 textValue = arr
                     .map((v: unknown) => {
                         if (typeof v === 'string') return v;
                         if (v && typeof v === 'object') {
-                            // Try to extract the most meaningful text representation
                             const obj = v as Record<string, unknown>;
                             return (
                                 (typeof obj.value === 'string' && obj.value) ||
                                 (typeof obj.displayValue === 'string' && obj.displayValue) ||
                                 (typeof obj.name === 'string' && obj.name) ||
-                                String(v)
+                                String(v) 
                             );
                         }
                         return String(v);
@@ -395,21 +501,22 @@ function transformCodaValue(value: any, field: ManagedCollectionFieldInput, coda
                     .filter(Boolean)
                     .join(', ');
             }
-            // Handle object values
             else if (value && typeof value === 'object') {
                 const obj = value as Record<string, unknown>;
+                // Attempt to extract a meaningful string representation from common Coda object structures
                 textValue = 
+                    (typeof obj.rawValue === 'string' && obj.rawValue) || 
                     (typeof obj.value === 'string' && obj.value) ||
                     (typeof obj.displayValue === 'string' && obj.displayValue) ||
                     (typeof obj.name === 'string' && obj.name) ||
-                    String(value);
+                    (typeof obj.content === 'string' && obj.content) || // For rich text / canvas like objects
+                    String(value); // Fallback: full stringification (might give [object Object])
             }
-            // Handle simple values
             else {
                 textValue = String(value);
             }
-
             return { type: 'string', value: stripMarkdown(textValue) };
+        } // End case 'string'
         case 'image': {
             let imageUrl = '';
             // Handle string values (direct URLs or markdown)
@@ -634,11 +741,11 @@ export async function getCodaDataSource(
 
     // Add debug logging to see raw data structure
     console.log('Raw Coda API response:', {
-        firstRow: rowsData.items[0],
+        // firstRow: rowsData.items[0], // Removed unused variable
         rowStructure: Object.keys(rowsData.items[0] || {})
     });
 
-    const firstRow = rowsData.items[0]?.values || {};
+    // const firstRow = rowsData.items[0]?.values || {}; // Removed unused variable
 
     // Instead of using only the first row, gather all values for each column
     // But now, sampleValues is not used for image detection, so we can just pass an empty array or undefined
@@ -832,7 +939,7 @@ export async function syncExistingCollection(
         // Create a list of possible slug fields including the special _id field
         const possibleSlugFields = [
             { id: '_id', name: 'Row ID', type: 'string' as const },
-            ...dataSourceResult.dataSource.fields.filter(field => field.type === "string")
+            ...dataSourceResult.dataSource.fields.filter((field: ManagedCollectionFieldInput) => field.type === "string") // Added explicit type for field
         ]
         
         const slugField = possibleSlugFields.find(field => field.id === previousSlugFieldId)

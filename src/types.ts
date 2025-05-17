@@ -1,4 +1,4 @@
-import { type ManagedCollectionFieldInput, type FieldDataEntryInput, type EnumCaseData } from "framer-plugin"
+import { type ManagedCollectionFieldInput, type FieldDataEntryInput, type EnumCaseData } from "framer-plugin";
 
 // Base collection field input type
 export type EnhancedCollectionFieldInput = ManagedCollectionFieldInput;
@@ -71,4 +71,16 @@ export interface CodaTable {
     id: string;
     name: string;
     type: string;
+}
+
+// Extend base FieldDataEntryInput type to support displayValue for dates
+export interface DateFieldDataEntryInput extends FieldDataEntryInput {
+    type: "date";
+    value: string;
+    displayValue?: string;
+}
+
+// Type guard to check if a field data entry is a date
+export function isDateField(entry: FieldDataEntryInput): entry is DateFieldDataEntryInput {
+    return entry.type === "date";
 }
