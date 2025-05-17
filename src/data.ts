@@ -653,32 +653,25 @@ function stripMarkdown(text: string): string {
     // Example: [user@example.com](user@example.com) -> user@example.com
     // Example: [Click here](http://example.com) -> Click here
     // Example: [Click here](mailto:user@example.com) -> Click here
-    newText = newText.replace(/\[([^\]]+)\]\(([^)]+)\)/g, (_match, linkText, linkUrl) => {
+    newText = newText.replace(/\[([^\]]+)\]\(([^\)]+)\)/g, (_match, linkText, linkUrl) => {
         if (linkUrl.startsWith('mailto:')) {
             const emailFromUrl = linkUrl.substring(7);
             if (linkText.toLowerCase() === emailFromUrl.toLowerCase()) {
                 return emailFromUrl; // Return just the email if text and mailto email match
             }
+            // If link text is different from the email in mailto, prefer the link text
+            // e.g. [Contact Us](mailto:support@example.com) -> "Contact Us"
+            return linkText; 
         } else if (linkText.toLowerCase() === linkUrl.toLowerCase()) {
             // Handles cases like [user@example.com](user@example.com)
             return linkText;
         }
         return linkText; // Otherwise, return the link text
     });
-    
-    // Unwrap triple backticks if present
-    // Ensure this doesn't affect already processed links if they were inside backticks (unlikely for this use case)
-    const tripleMatch = newText.match(/^```([\s\S]*?)```$/);
-    if (tripleMatch && typeof tripleMatch[1] === 'string') {
-        newText = tripleMatch[1].trim();
-    }
-    
-    // Unwrap single backticks if present (after triple, as triple can contain single)
-    const singleMatch = newText.match(/^`([^`]*)`$/);
-    if (singleMatch && typeof singleMatch[1] === 'string') {
-        newText = singleMatch[1].trim();
-    }
-    
+    // Globally unwrap triple backticks, trimming the content within them.
+    newText = newText.replace(/```([\s\S]*?)```/g, (_match, group1) => group1.trim());
+    // Globally unwrap single backticks (after triple), trimming the content within them.
+    newText = newText.replace(/`([^`]*)`/g, (_match, group1) => group1.trim());
     return newText.trim();
 }
 
