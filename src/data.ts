@@ -410,23 +410,21 @@ function transformCodaValue(value: any, field: ManagedCollectionFieldInput, coda
                         // Try to match "HH:mm" or "HH:mm:ss"
                         const timeOnlyMatch = value.match(/^([0-1]?\d|2[0-3]):([0-5]\d)(:([0-5]\d))?$/);
                         if (timeOnlyMatch) {
-                            hours = parseInt(timeOnlyMatch[1]!, 10); // Added non-null assertion
-                            minutes = parseInt(timeOnlyMatch[2]!, 10); // Added non-null assertion
+                            hours = parseInt(timeOnlyMatch[1]!, 10);
+                            minutes = parseInt(timeOnlyMatch[2]!, 10);
                             secondsVal = timeOnlyMatch[4] ? parseInt(timeOnlyMatch[4], 10) : 0;
                             successfullyParsed = true;
                         } else {
                             // If not a simple time string, try parsing as a full date string
-                            // Coda might send "1899-12-30T19:00:00.000-05:00" for its 'time' type
                             const dateObj = new Date(value);
                             if (!isNaN(dateObj.getTime())) {
-                                hours = dateObj.getHours(); // getHours() reflects the time in the date's effective timezone
+                                hours = dateObj.getHours();
                                 minutes = dateObj.getMinutes();
                                 secondsVal = dateObj.getSeconds();
                                 successfullyParsed = true;
                             }
                         }
                     } else if (value instanceof Date) {
-                        // If Coda provides a Date object directly
                         hours = value.getHours();
                         minutes = value.getMinutes();
                         secondsVal = value.getSeconds();
@@ -437,7 +435,7 @@ function transformCodaValue(value: any, field: ManagedCollectionFieldInput, coda
                         let formattedTime: string;
                         if (use12HourTime) {
                             const ampm = hours >= 12 ? 'PM' : 'AM';
-                            const formattedHours = hours % 12 || 12; // Convert 0 or 12 to 12 for 12hr format
+                            const formattedHours = hours % 12 || 12;
                             formattedTime = `${formattedHours}:${minutes.toString().padStart(2, '0')}`;
                             if (secondsVal > 0) {
                                formattedTime += `:${secondsVal.toString().padStart(2, '0')}`;
@@ -451,12 +449,12 @@ function transformCodaValue(value: any, field: ManagedCollectionFieldInput, coda
                         }
                         return { type: 'string', value: formattedTime };
                     } else {
+                        // Fall through to generic string processing if specific time parsing fails
                         console.warn(`Invalid or unparseable time value for Coda 'time' field ${field.name}: ${JSON.stringify(value)}. Falling back to generic string processing.`);
-                        // Fall through to generic string processing if parsing specifically for 'time' fails
                     }
                 } catch (e: any) {
-                    console.warn(`Error processing Coda 'time' field ${field.name} (value: ${JSON.stringify(value)}): ${e.message}. Falling back to generic string processing.`);
                     // Fall through to generic string processing on error
+                    console.warn(`Error processing Coda 'time' field ${field.name} (value: ${JSON.stringify(value)}): ${e.message}. Falling back to generic string processing.`);
                 }
             }
 
@@ -473,39 +471,38 @@ function transformCodaValue(value: any, field: ManagedCollectionFieldInput, coda
                 });
             }
 
+            const extractMeaningfulText = (item: any): string => {
+                if (typeof item === 'string') return item;
+                if (item && typeof item === 'object' && !Array.isArray(item)) {
+                    const obj = item as Record<string, unknown>;
+                    // Specifically handle schema.org WebPage objects for URLs (e.g., email addresses)
+                    if (obj['@type'] === 'WebPage' && typeof obj.url === 'string') {
+                        return obj.url;
+                    }
+                    // General object property extraction logic
+                    return (
+                        (typeof obj.rawValue === 'string' && obj.rawValue) || 
+                        (typeof obj.value === 'string' && obj.value) ||
+                        (typeof obj.displayValue === 'string' && obj.displayValue) ||
+                        (typeof obj.name === 'string' && obj.name) ||
+                        (typeof obj.content === 'string' && obj.content) || // For rich text / canvas like objects
+                        String(item) // Fallback: full stringification (might give [object Object])
+                    );
+                }
+                return String(item); // For primitives or if not an object
+            };
+
             if (Array.isArray(value) || (value && typeof value === 'object' && Array.isArray((value as any).rawValue))) {
                 const arr = Array.isArray(value) ? value : (value as any).rawValue;
                 textValue = arr
-                    .map((v: unknown) => {
-                        if (typeof v === 'string') return v;
-                        if (v && typeof v === 'object') {
-                            const obj = v as Record<string, unknown>;
-                            return (
-                                (typeof obj.value === 'string' && obj.value) ||
-                                (typeof obj.displayValue === 'string' && obj.displayValue) ||
-                                (typeof obj.name === 'string' && obj.name) ||
-                                String(v) 
-                            );
-                        }
-                        return String(v);
-                    })
-                    .filter(Boolean)
+                    .map(extractMeaningfulText)
+                    .filter(Boolean) // Filter out empty strings that might result from String(null) or String(undefined)
                     .join(', ');
             }
-            else if (value && typeof value === 'object') {
-                const obj = value as Record<string, unknown>;
-                // Attempt to extract a meaningful string representation from common Coda object structures
-                textValue = 
-                    (typeof obj.rawValue === 'string' && obj.rawValue) || 
-                    (typeof obj.value === 'string' && obj.value) ||
-                    (typeof obj.displayValue === 'string' && obj.displayValue) ||
-                    (typeof obj.name === 'string' && obj.name) ||
-                    (typeof obj.content === 'string' && obj.content) || // For rich text / canvas like objects
-                    String(value); // Fallback: full stringification (might give [object Object])
-            }
             else {
-                textValue = String(value);
+                textValue = extractMeaningfulText(value);
             }
+
             return { type: 'string', value: stripMarkdown(textValue) };
         } // End case 'string'
         case 'image': {
@@ -647,15 +644,42 @@ function transformCodaValue(value: any, field: ManagedCollectionFieldInput, coda
     }
 }
 
-// Utility to unwrap markdown code block/backtick formatting
+// Utility to unwrap markdown code block/backtick formatting and clean up links
 function stripMarkdown(text: string): string {
+    let newText = text;
+
+    // Remove markdown links, prefer URL if it's a mailto link and text is the email, otherwise prefer text.
+    // Example: [user@example.com](mailto:user@example.com) -> user@example.com
+    // Example: [user@example.com](user@example.com) -> user@example.com
+    // Example: [Click here](http://example.com) -> Click here
+    // Example: [Click here](mailto:user@example.com) -> Click here
+    newText = newText.replace(/\[([^\]]+)\]\(([^)]+)\)/g, (_match, linkText, linkUrl) => {
+        if (linkUrl.startsWith('mailto:')) {
+            const emailFromUrl = linkUrl.substring(7);
+            if (linkText.toLowerCase() === emailFromUrl.toLowerCase()) {
+                return emailFromUrl; // Return just the email if text and mailto email match
+            }
+        } else if (linkText.toLowerCase() === linkUrl.toLowerCase()) {
+            // Handles cases like [user@example.com](user@example.com)
+            return linkText;
+        }
+        return linkText; // Otherwise, return the link text
+    });
+    
     // Unwrap triple backticks if present
-    const triple = text.match(/^```([\s\S]*?)```$/);
-    if (triple && typeof triple[1] === 'string') return triple[1].trim();
-    // Unwrap single backticks if present
-    const single = text.match(/^`([^`]*)`$/);
-    if (single && typeof single[1] === 'string') return single[1].trim();
-    return text.trim();
+    // Ensure this doesn't affect already processed links if they were inside backticks (unlikely for this use case)
+    const tripleMatch = newText.match(/^```([\s\S]*?)```$/);
+    if (tripleMatch && typeof tripleMatch[1] === 'string') {
+        newText = tripleMatch[1].trim();
+    }
+    
+    // Unwrap single backticks if present (after triple, as triple can contain single)
+    const singleMatch = newText.match(/^`([^`]*)`$/);
+    if (singleMatch && typeof singleMatch[1] === 'string') {
+        newText = singleMatch[1].trim();
+    }
+    
+    return newText.trim();
 }
 
 // Utility to extract image/file URL from markdown or backticks
