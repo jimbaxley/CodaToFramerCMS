@@ -111,20 +111,23 @@ export function FieldMapping({ collection, dataSourceResult, initialSlugFieldId,
             .then(collectionFields => {
                 if (abortController.signal.aborted) return
 
+                // In the relevant section, map any enum fields to string fields before passing to setFields
+                const compatibleFields = collectionFields.map(field => {
+                    if (field.type === 'enum') {
+                        // Only keep id, name, and type for string fields
+                        return {
+                            id: field.id,
+                            name: field.name,
+                            type: 'string'
+                        } as ManagedCollectionFieldInput
+                    }
+                    // For all other field types, preserve all properties
+                    return { ...field } as ManagedCollectionFieldInput
+                })
+
                 const mergedSourceFields = mergeFieldsWithExistingFields(
                     dataSource.fields,
-                    collectionFields.map(field => {
-                        if (field.type === "enum" && field.cases) {
-                            return {
-                                ...field,
-                                cases: field.cases.map(c => ({
-                                    ...c,
-                                    nameByLocale: c.nameByLocale ?? {}
-                                }))
-                            }
-                        }
-                        return field
-                    })
+                    compatibleFields
                 );
                 setFields(mergedSourceFields);
 
