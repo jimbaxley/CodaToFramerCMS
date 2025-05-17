@@ -78,10 +78,9 @@ export function FieldMapping({ collection, dataSourceResult, initialSlugFieldId,
     const isSyncing = status === "syncing-collection"
     const isLoadingFields = status === "loading-fields"
 
-    // Find the best default slug field: prefer 'name', then first string field, then Row ID
+    // Always use Row ID as default, since it's guaranteed to be unique
     const stringFields = dataSource.fields.filter(field => field.type === "string")
-    const nameField = stringFields.find(field => field.name.toLowerCase() === "name")
-    const defaultSlugField = nameField || stringFields[0] || { id: '_id', name: 'Row ID', type: 'string' as const }
+    const defaultSlugField = { id: '_id', name: 'Row ID', type: 'string' as const }
 
     const [possibleSlugFields] = useState(() => [
         { id: '_id', name: 'Row ID', type: 'string' as const },
@@ -323,7 +322,7 @@ export function FieldMapping({ collection, dataSourceResult, initialSlugFieldId,
                     </div>
 
                     <label className="slug-field" htmlFor="slugField">
-                        Slug Field
+                        Slug Field (must be a unique value)
                         <select
                             required
                             name="slugField"
