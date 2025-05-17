@@ -1,5 +1,7 @@
 # Coda CMS Framer Plugin
 
+**Version 1.5.0**
+
 A Framer plugin that allows you to connect your Coda documents as a data source for your Framer projects.
 
 ## Features
