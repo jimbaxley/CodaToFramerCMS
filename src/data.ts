@@ -4,7 +4,7 @@ import {
     framer,
     type ManagedCollection,
     type ManagedCollectionItemInput,
-    type EnumCaseDataInput,
+    type EnumCaseData, // Use EnumCaseData instead of EnumCaseDataInput
     type LocalizedValueUpdate // Added import for LocalizedValueUpdate
 } from "framer-plugin"
 import { type CodaColumn, type CodaDoc, type CodaTable, type DataSource, type GetDataSourceResult, type EnumCase, type DateFieldDataEntryInput } from "./types" // Corrected import path and ensured DateFieldDataEntryInput is imported
@@ -109,16 +109,29 @@ function mapCodaTypeToFramerType(column: CodaColumn, _sampleValues: unknown[]): 
             type: 'image',
         };
     }
-    
-    switch (baseType) {
-        case 'select':
-        case 'scale':
-            // Handle select/scale fields as simple strings
-            return {
-                id: column.id,
-                name: column.name,
-                type: 'string'
+
+    // Enum mapping: if select/scale and has options.choices, map to Framer enum
+    if ((baseType === 'select' || baseType === 'scale') && column.format.options && Array.isArray(column.format.options.choices)) {
+        const cases: EnumCaseData[] = column.format.options.choices.map((choice: { name: string; id?: string }, idx: number) => ({
+            id: choice.id || `case-${idx}`,
+            name: choice.name,
+            nameByLocale: {
+                en: {
+                    action: 'set' as const,
+                    value: choice.name,
+                    needsReview: false
+                }
             }
+        }));
+        return {
+            id: column.id,
+            name: column.name,
+            type: 'enum',
+            cases
+        };
+    }
+
+    switch (baseType) {
         case 'text':
         case 'email':
         case 'phone':
@@ -903,7 +916,7 @@ export async function syncCollection(
         if (field.type === "enum" && "cases" in field) {
             return {
                 ...field,
-                cases: (field.cases || []).map((caseData: EnumCaseDataInput, idx) => ({
+                cases: (field.cases || []).map((caseData: EnumCaseData, idx) => ({
                     id: caseData.id || `case-${idx}`,
                     name: caseData.name,
                     nameByLocale: {

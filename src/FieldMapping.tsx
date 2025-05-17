@@ -385,7 +385,7 @@ export function FieldMapping({ collection, dataSourceResult, initialSlugFieldId,
                             <div className="framer-spinner" />
                         ) : (
                             <span>
-                              &rarr;  Import from "{dataSource.name || dataSource.id}" 
+                                &rarr;  Import from "{dataSource.name && dataSource.name.trim() ? dataSource.name : dataSource.id}"
                             </span>
                         )}
                     </button>
