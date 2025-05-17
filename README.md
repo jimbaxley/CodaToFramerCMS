@@ -8,11 +8,12 @@ A Framer plugin that allows you to connect your Coda documents as a data source 
 - Select tables as data sources
 - Map Coda fields to Framer fields
 - Support for various field types including text, numbers, dates, links, and more
-- Support for images using the ImageURL Coda Pack (https://coda.io/packs/imageurl-10797)
 
 ## Notes
 - Dates will revert to 12/31/1999 if a synced date field is empty
-- CODA API key required -  see https://coda.io/developers/apis/v1 for details
+- CODA API key required -  see https://coda.io/developers/apis/v1 for details. The scope of the key needs to be unrestricted to allow for Doc and Table selection.
+- Button fields are skipped (they aren't used in Framer)
+
 ## Development
 
 1. Install dependencies:

@@ -1,12 +1,25 @@
 import {
     type ManagedCollectionFieldInput,
     type FieldDataEntryInput,
-    framer,
     type ManagedCollection,
-    type ManagedCollectionItemInput
+    type ManagedCollectionItemInput,
+    framer
 } from "framer-plugin"
 import { marked } from "marked";
 import DOMPurify from "dompurify";
+
+interface WebPage {
+    '@type': 'WebPage';
+    url: string;
+}
+
+interface ValueWrapper {
+    rawValue?: unknown;
+    value?: unknown;
+    displayValue?: unknown;
+    name?: unknown;
+    content?: unknown;
+}
 
 export const PLUGIN_KEYS = {
     DATA_SOURCE_ID: "dataSourceId",
@@ -80,13 +93,13 @@ interface CodaColumn {
  * @param item - The value to extract text from.
  * @returns A string representation suitable for Framer.
  */
-function extractMeaningfulText(item: any): string {
+function extractMeaningfulText(item: unknown): string {
     if (typeof item === 'string') return item;
     if (item && typeof item === 'object' && !Array.isArray(item)) {
-        const obj = item as Record<string, unknown>;
+        const obj = item as ValueWrapper;
         // Specifically handle schema.org WebPage objects for URLs (e.g., email addresses)
-        if (obj['@type'] === 'WebPage' && typeof obj.url === 'string') {
-            return obj.url;
+        if ('url' in obj && typeof (obj as WebPage).url === 'string' && (obj as WebPage)['@type'] === 'WebPage') {
+            return (obj as WebPage).url;
         }
         // General object property extraction logic
         return (
@@ -118,10 +131,16 @@ function isLikelyImageUrl(url: string): boolean {
 /**
  * Helper function to map Coda types to Framer types
  */
-function mapCodaTypeToFramerType(column: CodaColumn, _sampleValues: unknown[]): ManagedCollectionFieldInput {
+function mapCodaTypeToFramerType(column: CodaColumn): ManagedCollectionFieldInput | null {
     const baseType = column.format.type.toLowerCase();
     const name = column.name.toLowerCase();
     const id = column.id.toLowerCase();
+    
+    // Skip button type columns
+    if (baseType === 'button') {
+        return null;
+    }
+
     // Map as image if Coda type is 'image' or name/id contains 'image' or 'graphic'
     if (
         baseType === 'image' ||
@@ -648,7 +667,7 @@ function transformCodaValue(value: any, field: ManagedCollectionFieldInput, coda
 function stripMarkdown(text: string): string {
     let newText = text;
 
-    // Remove markdown links, prefer URL if it's a mailto link and text is the email, otherwise prefer text.
+    // Remove markdown links, prefer URL if it's a mailto link and text is the email, otherwise prefer the link text.
     // Example: [user@example.com](mailto:user@example.com) -> user@example.com
     // Example: [user@example.com](user@example.com) -> user@example.com
     // Example: [Click here](http://example.com) -> Click here
@@ -758,13 +777,13 @@ export async function getCodaDataSource(
     // Instead of using only the first row, gather all values for each column
     // But now, sampleValues is not used for image detection, so we can just pass an empty array or undefined
     const fields = columns.map((col: CodaColumn) => {
-        // Only use type/name/id for mapping, not values
-        const mappedField = mapCodaTypeToFramerType(col, []);
-        if (mappedField.type === 'image' || mappedField.type === 'file') {
+        // Only use type/name/id for mapping
+        const mappedField = mapCodaTypeToFramerType(col);
+        if (mappedField && (mappedField.type === 'image' || mappedField.type === 'file')) {
             hasImageOrFileFields = true;
         }
         return mappedField;
-    });
+    }).filter((field): field is ManagedCollectionFieldInput => field !== null);
 
     const fieldMap = new Map<string, ManagedCollectionFieldInput>(
         fields.map((field: ManagedCollectionFieldInput) => [field.id, field])

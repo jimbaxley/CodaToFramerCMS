@@ -2,7 +2,7 @@ import "./App.css"
 
 import { framer, type ManagedCollection } from "framer-plugin"
 import { useEffect, useLayoutEffect, useState } from "react"
-import { getDataSource, getCodaDataSource } from "./data"
+import { getDataSource, getCodaDataSource, type GetDataSourceResult } from "./data"
 import { FieldMapping } from "./FieldMapping"
 import { SelectDataSource } from "./SelectDataSource"
 
@@ -13,7 +13,7 @@ interface AppProps {
 }
 
 export function App({ collection, previousDataSourceId, previousSlugFieldId }: AppProps) {
-    const [dataSourceResult, setDataSourceResult] = useState<any | null>(null)
+    const [dataSourceResult, setDataSourceResult] = useState<GetDataSourceResult | null>(null)
     const [isLoadingDataSource, setIsLoadingDataSource] = useState(false)
     const [hasShownImageUrlWarning, setHasShownImageUrlWarning] = useState(false);
     const [selectedTableName, setSelectedTableName] = useState<string | undefined>(undefined); // Store table name
