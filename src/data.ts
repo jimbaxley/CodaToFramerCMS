@@ -286,9 +286,8 @@ const ALLOWED_TAGS = [
 ];
 
 function markdownToSanitizedHtml(md: string): string {
-    // Use marked.parseSync if available, otherwise fallback to marked (sync)
-    const parser = marked as unknown as { parseSync?: (text: string) => string };
-    const rawHtml = parser.parseSync ? parser.parseSync(md) : marked(md);
+    // Use marked.parse synchronously with proper typing
+    const rawHtml = marked.parse(md, { async: false }) as string;
     // DOMPurify only allows a subset of config, so we use ALLOWED_TAGS and basic attributes
     return DOMPurify.sanitize(rawHtml, {
         ALLOWED_TAGS,
@@ -387,9 +386,9 @@ function transformCodaValue(value: unknown, field: ManagedCollectionFieldInput, 
             return { type: 'boolean', value: Boolean(value) };
         case 'date': 
             try {
-                let dateValue = value;
+                let dateValue: string | number | Date = value;
                 if (typeof value === 'object' && value !== null && 'value' in value) {
-                    dateValue = (value as { value: unknown }).value;
+                    dateValue = (value as { value: string | number | Date }).value;
                 }
                 const dateObj = new Date(String(dateValue));
                 if (isNaN(dateObj.getTime())) {
@@ -412,7 +411,7 @@ function transformCodaValue(value: unknown, field: ManagedCollectionFieldInput, 
                     let displayTime: string;
 
                     // Use local time for display formatting
-                    const localDateObj = new Date(value); // Re-parse to ensure local interpretation for formatting
+                    const localDateObj = new Date(dateObj); // Clone date for local formatting
                     const hours = localDateObj.getHours();
                     const minutes = localDateObj.getMinutes();
                     const seconds = localDateObj.getSeconds();
@@ -427,27 +426,24 @@ function transformCodaValue(value: unknown, field: ManagedCollectionFieldInput, 
 
                     if (codaColumnType === 'time') {
                         // For time-only, Framer still expects a full ISO string for the 'date' type.
-                        // We store the original time in a standard date (e.g., 1970-01-01) and provide the formatted time string in displayValue.
                         // Extract time parts from the original ISO string to maintain UTC time for storage
                         const timePart = isoDate.split('T')[1];
                         return {
-                            type: 'date' // Framer's field type
-                            ,
-                            value: `1970-01-01T${timePart}`, // Store as full ISO but with a fixed date
+                            type: 'date',
+                            value: `1970-01-01T${timePart}`,
                             displayValue: displayTime
-                        } as FieldDataEntryInput;
+                        };
                     }
 
                     // For 'datetime', store the full ISO string and provide the formatted time string in displayValue.
                     return {
-                        type: 'date', // Framer's field type
-                        value: isoDate, // Store full ISO string
+                        type: 'date',
+                        value: isoDate,
                         displayValue: displayTime
-                    } as FieldDataEntryInput;
+                    };
                 }
 
                 // Default for other date-like values (should ideally be covered by 'date' or 'datetime')
-                // If it's not 'date', 'datetime', or 'time', but Framer type is 'date', store as full ISO.
                 return { type: 'date', value: dateObj.toISOString() };
 
             } catch (error) {
@@ -526,9 +522,8 @@ function transformCodaValue(value: unknown, field: ManagedCollectionFieldInput, 
                     } else {
                         // Fall through to generic string processing if specific time parsing fails
                     }
-                } catch (error) {
+                } catch {
                     // Swallow error, fall through to generic string processing
-                    const _unused = error; // Acknowledge error without using it
                 }
             }
 
@@ -967,8 +962,9 @@ export async function syncCollection(
             return {
                 id: field.id,
                 name: field.name,
-                type: 'string'
-            }
+                type: 'string',
+                userEditable: true
+            };
         }
         return field
     })
