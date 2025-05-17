@@ -243,12 +243,7 @@ function transformCodaValue(value: any, field: ManagedCollectionFieldInput, coda
             case 'boolean':
                 return { type: 'boolean', value: false };
             case 'date':
-                // Use 12/31/1999 as default since Framer requires a valid date
-                // For date-only, ensure it's just the date part, for datetime/time, include time.
-                if (codaColumnType === 'date') {
-                    return { type: 'date', value: '1999-12-31' }; // Framer expects YYYY-MM-DD for date-only
-                }
-                return { type: 'date', value: '1999-12-31T00:00:00.000Z' }; 
+                return null; // Leave date blank if source is null/undefined/empty
             case 'image':
                 return { type: 'image', value: '' }; // Value is string URL
             case 'file':
@@ -324,10 +319,8 @@ function transformCodaValue(value: any, field: ManagedCollectionFieldInput, coda
             try {
                 const dateObj = new Date(value);
                 if (isNaN(dateObj.getTime())) {
-                    console.warn(`Invalid date value encountered for field ${field.name}: ${value}. Using fallback.`);
-                    return codaColumnType === 'date'
-                        ? { type: 'date', value: '1999-12-31' }
-                        : { type: 'date', value: '1999-12-31T00:00:00.000Z' };
+                    console.warn(`Invalid date value encountered for field ${field.name}: ${value}. Leaving blank.`);
+                    return null; // Leave date blank if invalid
                 }
 
                 // Handle Coda 'date' (date-only) type
@@ -384,10 +377,8 @@ function transformCodaValue(value: any, field: ManagedCollectionFieldInput, coda
                 return { type: 'date', value: dateObj.toISOString() };
 
             } catch (e: any) {
-                console.warn(`Error parsing date value for field ${field.name}: ${value} (Error: ${e.message}). Falling back.`);
-                return codaColumnType === 'date'
-                    ? { type: 'date', value: '1999-12-31' }
-                    : { type: 'date', value: '1999-12-31T00:00:00.000Z' };
+                console.warn(`Error parsing date value for field ${field.name}: ${value} (Error: ${e.message}). Leaving blank.`);
+                return null; // Leave date blank on error
             }
         case 'formattedText': 
             if (codaColumnType === 'canvas' || codaColumnType === 'richtext') {
