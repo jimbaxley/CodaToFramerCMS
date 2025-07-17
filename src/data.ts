@@ -398,8 +398,6 @@ function transformCodaValue(value: unknown, field: ManagedCollectionFieldInput, 
                     console.warn(`Invalid date value encountered for field ${field.name}: ${String(dateValue)}. Leaving blank.`);
                     return null; // Leave date blank if invalid
                 }
-                // Debug log for troubleshooting date mapping
-                console.log(`[Date Mapping] Field: ${field.name}, Coda Type: ${codaColumnType}, Raw Value:`, value, 'Parsed Value:', dateValue, 'Date Object:', dateObj);
 
                 // Handle Coda 'date' (date-only) type
                 if (codaColumnType === 'date') {
@@ -434,7 +432,6 @@ function transformCodaValue(value: unknown, field: ManagedCollectionFieldInput, 
                     const ms = dateObj.getMilliseconds().toString().padStart(3, '0');
                     
                     const localAsUtcValue = `${year}-${month}-${day}T${hours}:${minutes}:${seconds}.${ms}Z`;
-                    console.log(`[Date Mapping] ${field.name} - Sending to Framer (local as UTC):`, localAsUtcValue);
                     return {
                         type: 'date',
                         value: localAsUtcValue
