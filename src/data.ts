@@ -398,6 +398,8 @@ function transformCodaValue(value: unknown, field: ManagedCollectionFieldInput, 
                     console.warn(`Invalid date value encountered for field ${field.name}: ${String(dateValue)}. Leaving blank.`);
                     return null; // Leave date blank if invalid
                 }
+                // Debug log for troubleshooting date mapping
+                console.log(`[Date Mapping] Field: ${field.name}, Coda Type: ${codaColumnType}, Raw Value:`, value, 'Parsed Value:', dateValue, 'Date Object:', dateObj);
 
                 // Handle Coda 'date' (date-only) type
                 if (codaColumnType === 'date') {
@@ -410,10 +412,10 @@ function transformCodaValue(value: unknown, field: ManagedCollectionFieldInput, 
 
                 // Handle Coda 'datetime' and 'time' types
                 if (codaColumnType === 'datetime' || codaColumnType === 'time') {
-                    const isoDate = dateObj.toISOString();
                     if (codaColumnType === 'time') {
                         // For time-only, Framer still expects a full ISO string for the 'date' type.
                         // Extract time parts from the original ISO string to maintain UTC time for storage
+                        const isoDate = dateObj.toISOString();
                         const timePart = isoDate.split('T')[1];
                         return {
                             type: 'date',
@@ -421,10 +423,21 @@ function transformCodaValue(value: unknown, field: ManagedCollectionFieldInput, 
                         };
                     }
 
-                    // For 'datetime', store the full ISO string (no displayValue)
+                    // For 'datetime', preserve the local date/time but format as UTC to avoid timezone shifts
+                    // This prevents "Sept 30 8PM EDT" from becoming "Oct 1 midnight UTC" in Framer's display
+                    const year = dateObj.getFullYear();
+                    const month = (dateObj.getMonth() + 1).toString().padStart(2, '0');
+                    const day = dateObj.getDate().toString().padStart(2, '0');
+                    const hours = dateObj.getHours().toString().padStart(2, '0');
+                    const minutes = dateObj.getMinutes().toString().padStart(2, '0');
+                    const seconds = dateObj.getSeconds().toString().padStart(2, '0');
+                    const ms = dateObj.getMilliseconds().toString().padStart(3, '0');
+                    
+                    const localAsUtcValue = `${year}-${month}-${day}T${hours}:${minutes}:${seconds}.${ms}Z`;
+                    console.log(`[Date Mapping] ${field.name} - Sending to Framer (local as UTC):`, localAsUtcValue);
                     return {
                         type: 'date',
-                        value: isoDate
+                        value: localAsUtcValue
                     };
                 }
 
