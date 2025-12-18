@@ -49,7 +49,73 @@ interface ImageObject {
 export const PLUGIN_KEYS = {
     DATA_SOURCE_ID: "dataSourceId",
     SLUG_FIELD_ID: "slugFieldId",
+    CODA_TABLE_ID: "codaTableId",
 } as const
+
+/**
+ * Find a managed collection that was synced from a specific Coda table
+ * Note: Coda lookup fields reference base table IDs, but users may sync views.
+ * This function tries to match both exact IDs and related table references.
+ */
+async function findCollectionByCodaTableId(codaTableId: string): Promise<{ id: string, name: string } | null> {
+    try {
+        const collections = await framer.getManagedCollections();
+        
+        // First pass: try exact match
+        for (const collection of collections) {
+            const storedTableId = await collection.getPluginData(PLUGIN_KEYS.CODA_TABLE_ID);
+            if (storedTableId === codaTableId) {
+                return { id: collection.id, name: collection.name };
+            }
+        }
+        
+        // Second pass: Check if any collection's stored table ID could be a view of the requested table
+        // This handles cases where lookup fields reference base tables but users sync views
+        for (const collection of collections) {
+            const storedTableId = await collection.getPluginData(PLUGIN_KEYS.CODA_TABLE_ID);
+            const apiKey = await collection.getPluginData('apiKey');
+            const docId = await collection.getPluginData('docId');
+            
+            if (!storedTableId || !apiKey || !docId) continue;
+            
+            // Skip non-table IDs (e.g., canvas IDs from old syncs)
+            if (storedTableId.startsWith('canvas-') || !storedTableId.startsWith('grid-')) {
+                continue;
+            }
+            
+            // Fetch the table metadata for the stored table to see if it references the requested table
+            try {
+                const tableUrl = `https://coda.io/apis/v1/docs/${docId}/tables/${storedTableId}`;
+                const response = await fetch(tableUrl, {
+                    headers: { 'Authorization': `Bearer ${apiKey}` }
+                });
+                
+                if (response.ok) {
+                    const tableData = await response.json() as {
+                        id: string,
+                        name: string,
+                        parent?: { id: string, type: string },
+                        parentTable?: { id: string, type: string },
+                        [key: string]: unknown
+                    };
+                    
+                    // Check if this table's parent is the table we're looking for
+                    const parentId = tableData.parent?.id || tableData.parentTable?.id;
+                    if (parentId === codaTableId) {
+                        return { id: collection.id, name: collection.name };
+                    }
+                }
+            } catch (err) {
+                // Silently continue if we can't fetch metadata
+            }
+        }
+        
+        return null;
+    } catch (error) {
+        console.error('Error finding collection by Coda table ID:', error);
+        return null;
+    }
+}
 
 export interface DataSource {
     id: string
@@ -61,6 +127,8 @@ export interface DataSource {
 export interface GetDataSourceResult {
     dataSource: DataSource;
     showImageUrlWarning: boolean;
+    codaColumns?: Array<{ id: string, format: { type: string } }>;
+    codaTableId?: string; // The actual Coda table ID from the API
 }
 
 /**
@@ -104,6 +172,10 @@ interface CodaColumn {
     format: {
         type: string;
         isArray?: boolean;
+        table?: {
+            id?: string;
+            type?: string;
+        };
         options?: {
             choices?: Array<{
                 name: string;
@@ -180,12 +252,17 @@ function mapCodaTypeToFramerType(column: CodaColumn): ManagedCollectionFieldInpu
             type: 'image',
         };
     }
-    // Enum mapping: if select/scale and has options.choices, map to string (remove enum support)
-    if ((baseType === 'select' || baseType === 'scale') && column.format.options && Array.isArray(column.format.options.choices)) {
+    // Enum mapping: if select/scale and has options array, create enum field with cases
+    if ((baseType === 'select' || baseType === 'scale') && Array.isArray(column.format.options)) {
+        const choices = column.format.options;
         return {
             id: column.id,
             name: column.name,
-            type: 'string'
+            type: 'enum',
+            cases: choices.map((choice, idx) => ({
+                id: choice.id || choice.name || `choice-${idx}`,
+                name: choice.name
+            }))
         };
     }
     switch (baseType) {
@@ -254,10 +331,21 @@ function mapCodaTypeToFramerType(column: CodaColumn): ManagedCollectionFieldInpu
         case 'person':
         case 'lookup':
         case 'reference':
+            // For single-value lookup fields, return enum type (cases will be populated from actual data)
+            // Multi-value lookup fields (isArray: true) stay as strings with comma-separated values
+            if (column.format.type.toLowerCase() === 'lookup' && !column.format.isArray) {
+                return {
+                    id: column.id,
+                    name: column.name,
+                    type: 'enum',
+                    cases: [] // Will be populated with unique values from data
+                };
+            }
+            // For person/reference/multi-value lookup fields, keep as string
             return {
                 id: column.id,
                 name: column.name,
-                type: 'string' // Changed from 'collectionReference' to 'string'
+                type: 'string'
             }
         case 'url':
         case 'link':
@@ -321,6 +409,10 @@ function transformCodaValue(value: unknown, field: ManagedCollectionFieldInput, 
                 return { type: 'link', value: '' }; // Value is string URL/href
             case 'collectionReference':
                 return { type: 'collectionReference', value: '' }; // Value is single string ID
+            case 'multiCollectionReference':
+                return { type: 'multiCollectionReference', value: [] }; // Value is array of string IDs
+            case 'enum':
+                return { type: 'enum', value: '' }; // Empty enum value
             default:
                 console.warn(`Unknown field type "${field.type}" for null/undefined/empty value. Defaulting to empty string.`);
                 return { type: 'string', value: '' };
@@ -686,6 +778,89 @@ function transformCodaValue(value: unknown, field: ManagedCollectionFieldInput, 
             return { type: 'collectionReference', value: finalItemId }; 
         }
 
+        case 'multiCollectionReference': {
+            // Extract IDs from lookup field values (array of row references)
+            const itemIds: string[] = [];
+            const processItem = (item: unknown): string | null => {
+                if (typeof item === 'string') return item;
+                if (typeof item === 'object' && item !== null) {
+                    const obj = item as Record<string, unknown>;
+                    // Coda lookup values use rowId property for the referenced row's ID
+                    if ('rowId' in obj && typeof obj.rowId === 'string') return obj.rowId;
+                    if ('id' in obj && typeof obj.id === 'string') return obj.id;
+                    if ('@id' in obj && typeof obj['@id'] === 'string') return obj['@id'];
+                }
+                return null;
+            };
+            
+            if (Array.isArray(value)) {
+                value.forEach(item => {
+                    const id = processItem(item);
+                    if (id) itemIds.push(id);
+                });
+            } else {
+                const id = processItem(value);
+                if (id) itemIds.push(id);
+            }
+            
+            return { type: 'multiCollectionReference', value: itemIds };
+        }
+
+        case 'enum': {
+            // Handle enum values from Coda select/scale fields and lookup fields
+            let enumValue = '';
+            
+            // If value is an object with name property (Coda's select/lookup format)
+            if (typeof value === 'object' && value !== null && 'name' in value) {
+                const obj = value as Record<string, unknown>;
+                if (typeof obj.name === 'string') {
+                    enumValue = obj.name;
+                } else if ('id' in obj && typeof obj.id === 'string') {
+                    enumValue = obj.id;
+                }
+            } 
+            // If it's already a string, use it directly
+            else if (typeof value === 'string') {
+                enumValue = value;
+            }
+            // If it's an array (lookup fields can be multi-value), take the first valid value
+            else if (Array.isArray(value) && value.length > 0) {
+                const firstItem = value[0];
+                if (typeof firstItem === 'object' && firstItem !== null && 'name' in firstItem) {
+                    enumValue = String(firstItem.name);
+                } else if (typeof firstItem === 'string') {
+                    enumValue = firstItem;
+                }
+            }
+            
+            // Strip markdown code block formatting if present
+            if (enumValue) {
+                enumValue = enumValue.replace(/^```|```$/g, '').trim();
+            }
+
+            // Try to match with the field's cases if available
+            if ('cases' in field && Array.isArray(field.cases) && enumValue) {
+                // First try to find by ID
+                const matchingCase = field.cases.find(c => c.id === enumValue);
+                if (matchingCase) {
+                    return { type: 'enum', value: matchingCase.id };
+                }
+                // If not found by ID, try to find by name
+                const matchingCaseByName = field.cases.find(c => c.name === enumValue);
+                if (matchingCaseByName) {
+                    return { type: 'enum', value: matchingCaseByName.id };
+                }
+            }
+
+            // Return the value as-is if we have something
+            if (enumValue) {
+                return { type: 'enum', value: enumValue };
+            }
+
+            // Return null for no value - field will be skipped during sync
+            return null;
+        }
+
         default:
             // Only warn for truly unhandled types
             console.warn(
@@ -766,7 +941,29 @@ export async function getCodaDataSource(
     let hasImageOrFileFields = false;
     let hasValidImageOrFileUrls = false;
 
-    // First, fetch the columns metadata
+    // First, fetch the table metadata to get the actual Coda table ID
+    const tableUrl = `https://coda.io/apis/v1/docs/${docId}/tables/${tableId}`
+    const tableResponse = await fetch(tableUrl, {
+        ...(signal ? { signal } : {}),
+        headers
+    })
+
+    if (!tableResponse.ok) {
+        throw new Error(`Failed to fetch table metadata from Coda: ${tableResponse.status}`)
+    }
+
+    const tableData = await tableResponse.json() as { 
+        id: string, 
+        name: string, 
+        parent?: { id: string, type: string },
+        parentTable?: { id: string, type: string },
+        [key: string]: unknown 
+    };
+    
+    // Use the table's own ID as the Coda table identifier
+    const actualCodaTableId = tableData.id;
+
+    // Now fetch the columns metadata
     const columnsUrl = `https://coda.io/apis/v1/docs/${docId}/tables/${tableId}/columns`
     const columnsResponse = await fetch(columnsUrl, {
         ...(signal ? { signal } : {}),
@@ -808,16 +1005,92 @@ export async function getCodaDataSource(
 
     // const firstRow = rowsData.items[0]?.values || {}; // Removed unused variable
 
+    // Discover referenced collections for lookup fields
+    const lookupCollectionMap = new Map<string, { id: string, name: string }>();
+    for (const col of columns) {
+        if (col.format.type.toLowerCase() === 'lookup' && col.format.isArray && col.format.table?.id) {
+            const referencedCollection = await findCollectionByCodaTableId(col.format.table.id);
+            if (referencedCollection) {
+                lookupCollectionMap.set(col.id, referencedCollection);
+            } else {
+                console.warn(`⚠ No Framer collection found for lookup field "${col.name}" (references Coda table ${col.format.table.id}). Sync that table first to enable cross-collection filtering.`);
+            }
+        }
+    }
+
     // Instead of using only the first row, gather all values for each column
     // But now, sampleValues is not used for image detection, so we can just pass an empty array or undefined
     const fields = columns.map((col: CodaColumn) => {
         // Only use type/name/id for mapping
-        const mappedField = mapCodaTypeToFramerType(col);
+        let mappedField = mapCodaTypeToFramerType(col);
+        
+        // Convert multi-value lookup fields to multiCollectionReference if we found the referenced collection
+        if (mappedField && mappedField.type === 'string' && col.format.type.toLowerCase() === 'lookup' && col.format.isArray) {
+            const referencedCollection = lookupCollectionMap.get(col.id);
+            if (referencedCollection) {
+                mappedField = {
+                    id: col.id,
+                    name: col.name,
+                    type: 'multiCollectionReference',
+                    collectionId: referencedCollection.id
+                };
+            }
+        }
+        
         if (mappedField && (mappedField.type === 'image' || mappedField.type === 'file')) {
             hasImageOrFileFields = true;
         }
         return mappedField;
     }).filter((field): field is ManagedCollectionFieldInput => field !== null);
+
+    // For lookup fields with enum type, collect unique values from all rows to create enum cases
+    const lookupFields = fields.filter(f => f.type === 'enum' && columns.find(c => c.id === f.id && c.format.type.toLowerCase() === 'lookup'));
+    if (lookupFields.length > 0) {
+        // Collect unique values for each lookup field
+        const lookupValueSets = new Map<string, Set<string>>();
+        lookupFields.forEach(field => lookupValueSets.set(field.id, new Set()));
+
+        rowsData.items.forEach(row => {
+            lookupFields.forEach(field => {
+                const value = row.values[field.id];
+                if (!value) return;
+
+                const extractLookupValues = (v: unknown): string[] => {
+                    const results: string[] = [];
+                    if (Array.isArray(v)) {
+                        v.forEach(item => {
+                            if (typeof item === 'string') results.push(item);
+                            else if (typeof item === 'object' && item !== null) {
+                                if ('name' in item && typeof item.name === 'string') results.push(item.name);
+                                else if ('value' in item && typeof item.value === 'string') results.push(item.value);
+                            }
+                        });
+                    } else if (typeof v === 'object' && v !== null) {
+                        if ('name' in v && typeof v.name === 'string') results.push(v.name);
+                        else if ('value' in v && typeof v.value === 'string') results.push(v.value);
+                    } else if (typeof v === 'string') {
+                        results.push(v);
+                    }
+                    return results;
+                };
+
+                const values = extractLookupValues(value);
+                const valueSet = lookupValueSets.get(field.id);
+                values.forEach(v => valueSet?.add(v.replace(/^```|```$/g, '').trim()));
+            });
+        });
+
+        // Populate cases for each lookup field
+        lookupFields.forEach(field => {
+            const uniqueValues = Array.from(lookupValueSets.get(field.id) || []).filter(v => v.length > 0);
+            if ('cases' in field && Array.isArray(field.cases)) {
+                field.cases = uniqueValues.map((value) => ({
+                    id: value,
+                    name: value
+                }));
+            }
+        });
+    }
 
     const fieldMap = new Map<string, ManagedCollectionFieldInput>(
         fields.map((field: ManagedCollectionFieldInput) => [field.id, field])
@@ -867,6 +1140,8 @@ export async function getCodaDataSource(
             items,
         },
         showImageUrlWarning,
+        codaColumns: columns,
+        codaTableId: actualCodaTableId, // Store the actual Coda table ID
     }
 }
 
@@ -879,10 +1154,10 @@ export function mergeFieldsWithExistingFields(
     return sourceFields.map(sourceField => {
         const existingField = existingFieldMap.get(sourceField.id)
         if (existingField) {
-            // Keep the existing field's name and ID
+            // Keep the existing field's name, but use the source field's type and properties
+            // This ensures enum fields maintain their structure on re-sync
             return { 
                 ...sourceField,
-                id: existingField.id,
                 name: existingField.name
             }
         }
@@ -900,6 +1175,18 @@ export async function syncCollection(
     const { dataSource } = dataSourceResult;
     // Create a map of fields by ID for faster lookup
     const fieldMap = new Map(fields.map(field => [field.id, field]))
+    
+    // Get Coda column types for transformation
+    const codaColumnTypeMap = new Map<string, string>();
+    if (dataSourceResult.codaColumns) {
+        dataSourceResult.codaColumns.forEach((col: { id: string, format: { type: string } }) => {
+            codaColumnTypeMap.set(col.id, col.format.type.toLowerCase());
+        });
+    }
+    
+    // Get time format preference
+    const use12HourTimePreferenceRaw = await framer.getPluginData("use12HourTimeFormat");
+    const use12HourTimePreference = use12HourTimePreferenceRaw === "true";
 
     const items: ManagedCollectionItemInput[] = []
     const unsyncedItems = new Set(await collection.getItemIds())
@@ -938,8 +1225,16 @@ export async function syncCollection(
             if (!field) continue
 
             if (typeof value === "object" && value !== null && "type" in value && "value" in value) {
-                // Use the field ID from our map to ensure consistency
-                fieldData[field.id] = value as FieldDataEntryInput
+                // Get the Coda column type for proper transformation
+                const codaType = codaColumnTypeMap.get(fieldId) || 'text';
+                
+                // Transform the value using the same logic as getCodaDataSource
+                const transformedValue = transformCodaValue(value.value, field, codaType, use12HourTimePreference);
+                
+                // Only add the field if transformation succeeded
+                if (transformedValue !== null) {
+                    fieldData[field.id] = transformedValue;
+                }
             }
         }
 
@@ -951,17 +1246,11 @@ export async function syncCollection(
         })
     }
 
-    // Map any enum fields to string fields to avoid type errors
+    // Prepare fields for syncing - keep enum fields as-is
     const compatibleFields = fields.map((field: ManagedCollectionFieldInput) => {
+        // Enum fields are now properly supported, so we keep them as enum
         if (field.type === 'enum') {
-            // Map enum to string, preserve only id, name, and userEditable if present
-            const { id, name, userEditable } = field;
-            return {
-                id,
-                name,
-                type: 'string',
-                userEditable: userEditable ?? true
-            } as ManagedCollectionFieldInput;
+            return field;
         }
         // For multi-collection reference fields, ensure collectionId is present
         if (field.type === 'multiCollectionReference') {
@@ -978,6 +1267,10 @@ export async function syncCollection(
 
     await collection.setPluginData(PLUGIN_KEYS.DATA_SOURCE_ID, dataSource.id)
     await collection.setPluginData(PLUGIN_KEYS.SLUG_FIELD_ID, slugField.id)
+    
+    // Store the actual Coda table ID (not the Framer collection ID)
+    const codaTableIdToStore = dataSourceResult.codaTableId || dataSource.id;
+    await collection.setPluginData(PLUGIN_KEYS.CODA_TABLE_ID, codaTableIdToStore)
 }
 
 export async function syncExistingCollection(
@@ -996,17 +1289,12 @@ export async function syncExistingCollection(
     try {
         const dataSourceResult = await getDataSource()
         const existingFields = await collection.getFields()
-        // Map any enum fields to string fields to avoid type errors
-        const compatibleFields = existingFields.map((field) => {
-            if (field.type === 'enum') {
-                const { id, name, userEditable } = field;
-                return {
-                    id,
-                    name,
-                    type: 'string',
-                    userEditable: userEditable ?? true
-                } as ManagedCollectionFieldInput;
-            }
+        
+        // Merge existing fields with new data source fields to preserve enum structures
+        const mergedFields = mergeFieldsWithExistingFields(dataSourceResult.dataSource.fields, existingFields);
+        
+        // Validate fields
+        const compatibleFields = mergedFields.map((field) => {
             if (field.type === 'multiCollectionReference') {
                 if (!('collectionId' in field) || typeof (field as { collectionId?: unknown }).collectionId !== 'string') {
                     return null;

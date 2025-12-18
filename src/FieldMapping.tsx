@@ -27,7 +27,10 @@ function FieldMappingRow({ field, originalFieldName, isIgnored, onToggleDisabled
                     tabIndex={-1} 
                     readOnly 
                 />
-                <span>{originalFieldName ?? field.id}</span>
+                <span>
+                    {originalFieldName ?? field.id}
+                    {field.type === 'enum' && <span style={{ marginLeft: '4px', fontSize: '0.85em', color: '#999' }}>(Enum)</span>}
+                </span>
             </button>
             <svg xmlns="http://www.w3.org/2000/svg" width="8" height="8" fill="none">
                 <path
@@ -110,17 +113,8 @@ export function FieldMapping({ collection, dataSourceResult, initialSlugFieldId,
             .then(collectionFields => {
                 if (abortController.signal.aborted) return
 
-                // In the relevant section, map any enum fields to string fields before passing to setFields
+                // Preserve all field types including enums
                 const compatibleFields = collectionFields.map(field => {
-                    if (field.type === 'enum') {
-                        // Only keep id, name, and type for string fields
-                        return {
-                            id: field.id,
-                            name: field.name,
-                            type: 'string'
-                        } as ManagedCollectionFieldInput
-                    }
-                    // For all other field types, preserve all properties
                     return { ...field } as ManagedCollectionFieldInput
                 })
 

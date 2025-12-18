@@ -201,7 +201,6 @@ form {
     cursor: pointer;
     font-weight: 500;
     width: 100%; /* Fill container */
-    max-width: 260px; /* Match input field max-width */
     transition: filter 0.2s ease; /* Add transition for filter */
 }
 
@@ -224,6 +223,164 @@ form {
 .api-docs-link a:hover {
     text-decoration: underline;
 }
+
+/* Connection mode selector with radio buttons */
+.connection-mode-selector {
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+    margin: 20px 0;
+    padding: 16px;
+    background: rgba(0, 0, 0, 0.03);
+    border-radius: 8px;
+    text-align: left;
+}
+
+.radio-option {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    cursor: pointer;
+    padding: 8px;
+    border-radius: 6px;
+    transition: background-color 0.2s;
+}
+
+.radio-option:hover {
+    background: rgba(0, 0, 0, 0.05);
+}
+
+.radio-option input[type="radio"] {
+    cursor: pointer;
+    margin: 0;
+    flex-shrink: 0;
+    width: 16px;
+    height: 16px;
+}
+
+.radio-label {
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+    user-select: none;
+    flex: 1;
+}
+
+.radio-label strong {
+    font-size: 0.9em;
+    font-weight: 600;
+    color: var(--framer-color-text);
+    line-height: 1.2;
+}
+
+.radio-description {
+    font-size: 0.75em;
+    color: var(--framer-color-text-tertiary);
+    line-height: 1.4;
+}
+
+.direct-id-input {
+    margin-top: 8px;
+}
+
+.field-hint {
+    font-size: 0.75em;
+    color: var(--framer-color-text-tertiary);
+    margin: 0 0 12px 0;
+    line-height: 1.5;
+    word-wrap: break-word;
+    overflow-wrap: break-word;
+}
+
+.field-hint code {
+    background: rgba(0, 0, 0, 0.05);
+    padding: 2px 4px;
+    border-radius: 3px;
+    font-family: monospace;
+    font-size: 0.95em;
+}
+
+.field-hint strong {
+    color: var(--framer-color-text);
+    font-weight: 600;
+}
+
+.field-description {
+    font-size: 0.9em;
+    color: var(--framer-color-text-secondary);
+    margin: 0 0 12px 0;
+    line-height: 1.5;
+}
+
+.two-column-layout {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 12px;
+    width: 100%;
+    align-items: start;
+}
+
+.input-column {
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+}
+
+.info-column {
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+    text-align: left;
+}
+
+.info-column .field-hint {
+    margin: 0;
+    word-wrap: break-word;
+    overflow-wrap: break-word;
+    hyphens: auto;
+}
+
+footer {
+    display: flex;
+    gap: 10px;
+    padding: 15px;
+    justify-content: center;
+}
+
+footer button {
+    flex: 1;
+}
+
+.primary-button {
+    background-color: var(--framer-color-tint);
+    color: white;
+    border: none;
+    padding: 10px;
+    border-radius: 6px;
+    cursor: pointer;
+    font-weight: 500;
+    transition: filter 0.2s ease;
+}
+
+.primary-button:hover {
+    filter: brightness(90%);
+}
+
+.secondary-button {
+    background-color: #000;
+    color: white;
+    border: none;
+    padding: 10px;
+    border-radius: 6px;
+    cursor: pointer;
+    font-weight: 500;
+    transition: filter 0.2s ease;
+}
+
+.secondary-button:hover {
+    filter: brightness(80%);
+}
+
 /* End of styles for intro screen */
 
 .mapping {

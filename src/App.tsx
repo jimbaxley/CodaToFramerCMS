@@ -79,8 +79,8 @@ export function App({ collection, previousDataSourceId, previousSlugFieldId }: A
         const hasDataSourceSelected = Boolean(dataSourceResult?.dataSource) // Check within result
 
         framer.showUI({
-            width: hasDataSourceSelected ? 360 : 300,
-            height: hasDataSourceSelected ? 425 : 400,
+            width: hasDataSourceSelected ? 360 : 380,
+            height: hasDataSourceSelected ? 425 : 500,
             minWidth: hasDataSourceSelected ? 360 : undefined,
             minHeight: hasDataSourceSelected ? 425 : undefined,
             resizable: hasDataSourceSelected,
