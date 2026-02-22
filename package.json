@@ -10,6 +10,7 @@
     "format": "prettier . --write",
     "lint": "eslint . --max-warnings 0",
     "pack": "framer-plugin-tools pack",
+    "plugin-dev": "framer-plugin-tools dev",
     "preview": "vite preview",
     "typecheck": "tsc"
   },

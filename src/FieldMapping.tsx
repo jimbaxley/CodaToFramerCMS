@@ -196,32 +196,81 @@ export function FieldMapping({ collection, dataSourceResult, initialSlugFieldId,
                     ...field,
                     name: field.name.trim() || field.id,
                 }
-
                 if (field.type === "enum" && "cases" in field) {
                     return {
                         ...sanitizedField,
-                        cases: (field.cases || []).map((caseData, idx) => {
-                            const enumCase = {
-                                id: caseData.id || `case-${idx}`,
-                                name: caseData.name,
-                                nameByLocale: {
-                                    en: {
-                                        action: "set" as const,
-                                        value: caseData.name,
-                                        needsReview: false
-                                    }
-                                }
-                            }
-                            return enumCase
-                        })
+                        cases: (field.cases || []).map((caseData, idx) => ({
+                            id: caseData.id || `case-${idx}`,
+                            name: caseData.name
+                        }))
                     }
                 }
-
                 return sanitizedField
             })
 
+            // Validate enum field values in all items before syncing
+            const enumFieldIds = sanitizedFields.filter(f => f.type === 'enum').map(f => f.id)
+            const items = dataSource.items.map((item, idx) => {
+                const newItem = { ...item }
+                for (const fieldId of enumFieldIds) {
+                    const val = newItem[fieldId]
+                    if (val && typeof val !== 'string') {
+                        if (typeof val === 'object' && val !== null) {
+                            if ('id' in val && typeof val.id === 'string') newItem[fieldId] = val.id
+                            else if ('name' in val && typeof val.name === 'string') newItem[fieldId] = val.name
+                            else if ('rowId' in val && typeof val.rowId === 'string') newItem[fieldId] = val.rowId
+                            else if ('value' in val && typeof val.value === 'string') newItem[fieldId] = val.value
+                            else {
+                                console.warn(`Row ${idx}: Invalid enum value for field '${fieldId}', got:`, val)
+                                newItem[fieldId] = ''
+                            }
+                        } else {
+                            console.warn(`Row ${idx}: Invalid enum value for field '${fieldId}', got:`, val)
+                            newItem[fieldId] = ''
+                        }
+                    }
+                }
+                return newItem
+            })
+
+            // Enforce slug uniqueness
+                const slugValues = items.map((item) => {
+                    let slugFieldData = item[selectedSlugField.id];
+                    if (slugFieldData === undefined && selectedSlugField.name in item) {
+                        slugFieldData = item[selectedSlugField.name];
+                    }
+                    let slugValue;
+                    if (typeof slugFieldData === "object" && slugFieldData && "value" in slugFieldData) {
+                        slugValue = String(slugFieldData.value);
+                    } else if (typeof slugFieldData === "string") {
+                        slugValue = slugFieldData;
+                    } else {
+                        slugValue = '';
+                    }
+                    return slugValue;
+                });
+            const slugSet = new Set();
+            for (const slug of slugValues) {
+                if (!slug || slugSet.has(slug)) {
+                    framer.notify("Slug values must be unique and non-empty. Please check your data and try again.", { variant: "error" });
+                    setStatus("mapping-fields");
+                    return;
+                }
+                slugSet.add(slug);
+            }
+
+            // Overwrite dataSourceResult with validated items
+            const validatedDataSourceResult = {
+                ...dataSourceResult,
+                dataSource: {
+                    ...dataSourceResult.dataSource,
+                    // ...existing code...
+                    items
+                }
+            }
+
             const fieldsToSync = sanitizedFields.filter(field => !ignoredFieldIds.has(field.id))
-            await syncCollection(collection, dataSourceResult, fieldsToSync, selectedSlugField)
+            await syncCollection(collection, validatedDataSourceResult, fieldsToSync, selectedSlugField)
             await framer.closePlugin("Synchronization successful", { variant: "success" })
         } catch (error) {
             console.error(error)

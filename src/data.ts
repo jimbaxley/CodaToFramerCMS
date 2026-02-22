@@ -253,8 +253,15 @@ function mapCodaTypeToFramerType(column: CodaColumn): ManagedCollectionFieldInpu
         };
     }
     // Enum mapping: if select/scale and has options array, create enum field with cases
-    if ((baseType === 'select' || baseType === 'scale') && Array.isArray(column.format.options)) {
+    if (((baseType === 'select' || baseType === 'scale') && Array.isArray(column.format.options)) ||
+        (baseType === 'lookup' && Array.isArray(column.format.options))) {
         const choices = column.format.options;
+        console.log('[CodaCMS] Enum/Lookup Mapping:', {
+            columnId: column.id,
+            columnName: column.name,
+            baseType,
+            options: choices
+        });
         return {
             id: column.id,
             name: column.name,
@@ -808,56 +815,48 @@ function transformCodaValue(value: unknown, field: ManagedCollectionFieldInput, 
 
         case 'enum': {
             // Handle enum values from Coda select/scale fields and lookup fields
-            let enumValue = '';
-            
-            // If value is an object with name property (Coda's select/lookup format)
-            if (typeof value === 'object' && value !== null && 'name' in value) {
-                const obj = value as Record<string, unknown>;
-                if (typeof obj.name === 'string') {
-                    enumValue = obj.name;
-                } else if ('id' in obj && typeof obj.id === 'string') {
-                    enumValue = obj.id;
-                }
-            } 
-            // If it's already a string, use it directly
-            else if (typeof value === 'string') {
-                enumValue = value;
-            }
-            // If it's an array (lookup fields can be multi-value), take the first valid value
-            else if (Array.isArray(value) && value.length > 0) {
-                const firstItem = value[0];
-                if (typeof firstItem === 'object' && firstItem !== null && 'name' in firstItem) {
-                    enumValue = String(firstItem.name);
-                } else if (typeof firstItem === 'string') {
-                    enumValue = firstItem;
-                }
-            }
-            
-            // Strip markdown code block formatting if present
-            if (enumValue) {
-                enumValue = enumValue.replace(/^```|```$/g, '').trim();
+            if (field && field.name && field.id) {
+                const caseList = (field.cases || []).map(c => `id: '${c.id}', name: '${c.name}'`).join('; ');
+                console.log(`[CodaCMS] Enum Value Extraction: fieldId=${field.id}, fieldName=${field.name}, value=${JSON.stringify(value)}, cases=[${caseList}]`);
             }
 
-            // Try to match with the field's cases if available
-            if ('cases' in field && Array.isArray(field.cases) && enumValue) {
+            function extractEnumString(val: any): string | undefined {
+                if (val == null) return undefined;
+                if (typeof val === 'string') return stripMarkdown(val);
+                if (typeof val === 'object') {
+                    if ('id' in val && typeof val.id === 'string') return stripMarkdown(val.id);
+                    if ('name' in val && typeof val.name === 'string') return stripMarkdown(val.name);
+                    if ('rowId' in val && typeof val.rowId === 'string') return stripMarkdown(val.rowId);
+                }
+                return undefined;
+            }
+            let enumValue: string | undefined;
+            if (Array.isArray(value) && value.length > 0) {
+                // Try to extract from first item in array
+                enumValue = extractEnumString(value[0]);
+            } else {
+                enumValue = extractEnumString(value);
+            }
+
+            // Strip markdown code block formatting, whitespace, and compare case-insensitively
+            const clean = (s: string | undefined) => (s || '').trim().toLowerCase();
+            let cleanEnumValue = enumValue ? clean(enumValue) : '';
+
+            // Only return a valid string id from the enum cases (compare after cleaning)
+            if ('cases' in field && Array.isArray(field.cases) && cleanEnumValue) {
                 // First try to find by ID
-                const matchingCase = field.cases.find(c => c.id === enumValue);
+                const matchingCase = field.cases.find(c => clean(c.id) === cleanEnumValue);
                 if (matchingCase) {
-                    return { type: 'enum', value: matchingCase.id };
+                    return matchingCase.id;
                 }
                 // If not found by ID, try to find by name
-                const matchingCaseByName = field.cases.find(c => c.name === enumValue);
+                const matchingCaseByName = field.cases.find(c => clean(c.name) === cleanEnumValue);
                 if (matchingCaseByName) {
-                    return { type: 'enum', value: matchingCaseByName.id };
+                    return matchingCaseByName.id;
                 }
             }
 
-            // Return the value as-is if we have something
-            if (enumValue) {
-                return { type: 'enum', value: enumValue };
-            }
-
-            // Return null for no value - field will be skipped during sync
+            // If no valid id found, skip the field (never return an object)
             return null;
         }
 
@@ -1104,20 +1103,60 @@ export async function getCodaDataSource(
     const use12HourTimePreference = use12HourTimePreferenceRaw === "true";
 
     const items = rowsData.items.map((row: { id: string; values: Record<string, unknown> }) => {
+                                    // DEBUG: Print the final mapped item for this row
+                                    setTimeout(() => {
+                                        console.log(`[CodaCMS][DEBUG][Final Item] rowId=${row.id}, mappedItem=${JSON.stringify(fieldData)}`);
+                                    }, 0);
+                            // DEBUG: Print row index, row ID, full row.values, and extracted Category for each row
+                            const rowIndex = rowsData.items.findIndex(r => r.id === row.id);
+                            const categoryValue = row.values['c-QHo-VZSapc'];
+                            console.log(`[CodaCMS][DEBUG][Row ${rowIndex}] rowId=${row.id}, rowValues=${JSON.stringify(row.values)}, Category(raw)=${JSON.stringify(categoryValue)}`);
+                        // DEBUG: Log actual field-to-value mapping for this row
+                        // Use the index argument from .map()
+                        // .map((row, idx) => { ... })
+                        // So add idx as a second parameter
+                        // (see below for correct usage)
+                // DEBUG: Log mapping for first few rows
+                const idx = (typeof row.index === 'number') ? row.index : undefined;
+                if (typeof idx === 'number' ? idx < 5 : items.length < 5) {
+                    const readableFieldMap = Array.from(fieldMap.entries()).map(([id, field]) => ({ id, name: field.name, type: field.type }));
+                    console.log('[CodaCMS][DEBUG] Row mapping:', {
+                        rowId: row.id,
+                        rowValues: row.values,
+                        fieldMap: readableFieldMap,
+                        codaColumnTypeMap: Array.from(codaColumnTypeMap.entries()),
+                    });
+                }
+        // Always create a new object for each row, using column names as keys
         const fieldData: Record<string, FieldDataEntryInput> = {
             _id: {
                 type: "string",
                 value: row.id
             }
-        }
+        };
 
         for (const [key, value] of Object.entries(row.values)) {
-            const field = fieldMap.get(key)
+            const field = fieldMap.get(key);
             if (field) {
                 const codaType = codaColumnTypeMap.get(key) || 'text';
-                const transformedEntry = transformCodaValue(value, field, codaType, use12HourTimePreference)
+                const transformedEntry = transformCodaValue(value, field, codaType, use12HourTimePreference);
+                const outputKey = field.name && typeof field.name === 'string' ? field.name : key;
                 if (transformedEntry !== null) {
-                    fieldData[key] = transformedEntry;
+                    if (field.type === 'enum') {
+                        if (typeof transformedEntry === 'string') {
+                            fieldData[outputKey] = ('' + transformedEntry);
+                        } else if (typeof transformedEntry === 'object' && transformedEntry !== null && typeof transformedEntry.value === 'string') {
+                            fieldData[outputKey] = ('' + transformedEntry.value);
+                        } else {
+                            fieldData[outputKey] = '';
+                        }
+                    } else if (Array.isArray(transformedEntry)) {
+                        fieldData[outputKey] = [...transformedEntry];
+                    } else if (typeof transformedEntry === 'object' && transformedEntry !== null) {
+                        fieldData[outputKey] = { ...transformedEntry };
+                    } else {
+                        fieldData[outputKey] = transformedEntry;
+                    }
                     if (field.type === 'image' || field.type === 'file') {
                         if (transformedEntry.value && typeof transformedEntry.value === 'string' && transformedEntry.value.trim() !== '') {
                             hasValidImageOrFileUrls = true;
@@ -1126,9 +1165,8 @@ export async function getCodaDataSource(
                 }
             }
         }
-        
-        return fieldData
-    })
+        return fieldData;
+    });
 
     const showImageUrlWarning = hasImageOrFileFields && !hasValidImageOrFileUrls;
 
@@ -1203,47 +1241,81 @@ export async function syncCollection(
             continue
         }
 
-        const slugFieldData = item[slugField.id]
-        const slugValue = typeof slugFieldData === "object" && slugFieldData && "value" in slugFieldData
-            ? String(slugFieldData.value)
-            : undefined
-
+        // Try both field ID and field name as keys
+        let slugValue: string | undefined = undefined;
+        const slugKeys = [slugField.id, slugField.name].filter(Boolean);
+        for (const key of slugKeys) {
+            const slugFieldData = item[key];
+            if (typeof slugFieldData === "object" && slugFieldData && "value" in slugFieldData) {
+                slugValue = String(slugFieldData.value);
+                break;
+            } else if (typeof slugFieldData === "string") {
+                slugValue = slugFieldData;
+                break;
+            }
+        }
         if (!slugValue) {
-            console.warn(`Skipping item at index ${i} because it doesn't have a valid slug`)
-            continue
+            console.warn(`Skipping item at index ${i} because it doesn't have a valid slug`);
+            continue;
         }
 
         unsyncedItems.delete(rowId)
 
         const fieldData: Record<string, FieldDataEntryInput> = {}
         for (const [fieldId, value] of Object.entries(item)) {
+            // Diagnostic logging for slug extraction
+            if (slugKeys.includes(fieldId)) {
+                console.log(`[CodaCMS] SyncCollection: Row ${i} - Row ID: ${rowId}, Slug Field Key: ${fieldId}, Slug Field Data:`, value, 'Slug Value:', slugValue);
+            }
             // Skip the special _id field
-            if (fieldId === '_id') continue
-            
-            // Only include fields that are in our field map
-            const field = fieldMap.get(fieldId)
-            if (!field) continue
+            if (fieldId === '_id') continue;
+
+            // Try to find the field by column name (item key) or by field ID
+            let field = fieldMap.get(fieldId);
+            if (!field) {
+                // Try to find by name (column name)
+                field = Array.from(fieldMap.values()).find(f => f.name === fieldId);
+            }
+            if (!field) continue;
 
             if (typeof value === "object" && value !== null && "type" in value && "value" in value) {
-                // Get the Coda column type for proper transformation
-                const codaType = codaColumnTypeMap.get(fieldId) || 'text';
-                
-                // Transform the value using the same logic as getCodaDataSource
+                let codaType = codaColumnTypeMap.get(fieldId) || codaColumnTypeMap.get(field.id) || 'text';
                 const transformedValue = transformCodaValue(value.value, field, codaType, use12HourTimePreference);
-                
-                // Only add the field if transformation succeeded
                 if (transformedValue !== null) {
-                    fieldData[field.id] = transformedValue;
+                    if (field.type === 'enum') {
+                        const enumVal = transformedValue.value ?? transformedValue;
+                        if (typeof enumVal === 'string' && enumVal.trim() !== '') {
+                            fieldData[field.id] = { type: 'enum', value: enumVal };
+                        }
+                        // else: skip adding this field
+                    } else {
+                        fieldData[field.id] = transformedValue;
+                    }
+                }
+            } else if (typeof value === 'string' || typeof value === 'number' || typeof value === 'boolean') {
+                if (field.type === 'enum') {
+                    if (typeof value === 'string' && value.trim() !== '') {
+                        fieldData[field.id] = { type: 'enum', value };
+                    }
+                    // else: skip adding this field
+                } else {
+                    fieldData[field.id] = { type: typeof value, value };
                 }
             }
         }
 
         items.push({
+        // Diagnostic logging for uniqueness review (after items are constructed)
             id: rowId,
             slug: slugValue,
             draft: false,
             fieldData,
         })
+    }
+
+    // LOG: Show only the first item payload for brevity
+    if (items.length > 0) {
+        console.log('[CodaCMS][DEBUG][Framer Write] first item:', JSON.stringify(items[0], null, 2));
     }
 
     // Prepare fields for syncing - keep enum fields as-is
